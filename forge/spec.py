@@ -93,8 +93,16 @@ def save(spec: ServiceSpec) -> pathlib.Path:
     return p
 
 
+def default_treatment(arg: str, meta: dict) -> str:
+    """Suggested classification for one resource argument."""
+    if meta.get("required"):
+        return "user"
+    return "skipped"
+
+
 def draft(service: str, resource: str, attrs: dict[str, dict],
-          standard_inputs: list[str]) -> ServiceSpec:
+          standard_inputs: list[str],
+          treatments: dict[str, str] | None = None) -> ServiceSpec:
     """Classify resource arguments: required -> user inputs, others -> skipped."""
     spec = ServiceSpec(
         service=service, resource=resource, id=_uuid_placeholder(),
@@ -104,16 +112,28 @@ def draft(service: str, resource: str, attrs: dict[str, dict],
             display_name="Default")],
         skipped_inputs=list(standard_inputs),
     )
+    treatments = treatments or {}
     for arg, meta in sorted(attrs.items()):
-        if arg in ("id", "region") or meta.get("computed") and not meta.get("optional"):
+        if arg in standard_inputs:
+            continue  # platform inputs are generated, never skipped entries
+        if arg == "id" or (meta.get("computed") and not meta.get("optional")):
             if arg == "id":
                 spec.outputs.append(OutputSpec(field_name="id", details=f"ID of the {resource}"))
             continue
-        if meta.get("required"):
+        treatment = treatments.get(arg) or default_treatment(arg, meta)
+        if treatment == "user":
             spec.inputs[arg] = InputSpec(
                 maps_to=arg, details=f"{arg} of {resource}.",
                 description=f"{arg} of {resource}.",
                 rationale="required argument of the resource")
+        elif treatment == "plan":
+            spec.inputs[arg] = InputSpec(
+                maps_to=arg, details=f"{arg} of {resource}.",
+                description=f"{arg} of {resource}.", plan_input=True,
+                rationale="fixed by the plan")
+        elif treatment == "computed":
+            spec.bind.computed.append(
+                ComputedSpec(name=arg, default=f'${{instance.details["{arg}"]}}'))
         else:
             spec.skipped_inputs.append(arg)
     return spec

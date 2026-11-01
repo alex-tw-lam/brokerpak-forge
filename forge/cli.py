@@ -93,15 +93,46 @@ def service_new(
         resource = candidates[pick - 1]
 
     proj = project_mod.load()
-    spec = spec_mod.draft(service, resource, s.attributes("resource", resource),
-                          proj.standard_inputs)
+    attrs = s.attributes("resource", resource)
+
+    # the parameters first, R/O/C/S and the suggested treatment
+    typer.echo(f"\n{resource} parameters:")
+    typer.echo(f"  {'argument':42s} {'type':14s} {'flags':8s} suggested")
+    for arg, meta in sorted(attrs.items()):
+        flags = "".join(f for f, k in [("R", "required"), ("O", "optional"),
+                                       ("C", "computed"), ("S", "sensitive")] if meta.get(k))
+        t = meta.get("type", "?")
+        t = "".join(x for x in t if isinstance(x, str)) if isinstance(t, list) else t
+        if arg == "id" or (meta.get("computed") and not meta.get("optional")):
+            suggested = "output"
+        elif arg in proj.standard_inputs:
+            suggested = "platform"
+        else:
+            suggested = spec_mod.default_treatment(arg, meta)
+        typer.echo(f"  {arg:42s} {str(t):14s} {flags or '-':8s} {suggested}")
+
+    treatments: dict[str, str] = {}
+    if not yes:
+        for arg in sorted(attrs):
+            meta = attrs[arg]
+            if arg == "id" or (meta.get("computed") and not meta.get("optional")):
+                continue
+            if arg in proj.standard_inputs:
+                continue
+            treatments[arg] = typer.prompt(
+                f"  {arg} -> user/plan/computed/skipped",
+                default=spec_mod.default_treatment(arg, meta))
+
+    spec = spec_mod.draft(service, resource, attrs, proj.standard_inputs,
+                          treatments=treatments)
     path = spec_mod.save(spec)
     typer.echo(f"wrote {path}")
-    typer.echo(f"inputs:      {', '.join(spec.inputs) or '(none)'}")
+    typer.echo(f"inputs:      {', '.join(f'{k} (plan)' if v.plan_input else k for k, v in spec.inputs.items()) or '(none)'}")
+    typer.echo(f"computed:    {', '.join(c.name for c in spec.bind.computed) or '(none)'}")
     typer.echo(f"skipped:     {', '.join(spec.skipped_inputs) or '(none)'}")
     typer.echo(f"outputs:     {', '.join(o.field_name for o in spec.outputs) or '(none)'}")
-    typer.echo(f"\nnext: forge service move {service} <field> --to user|plan|computed")
-    typer.echo(f"      forge service gen {service} --write")
+    typer.echo(f"\nnext: forge {service} move <param> --to user|plan|computed|skipped")
+    typer.echo(f"      forge {service} gen --write")
 
 
 @service_app.command("move")
@@ -189,6 +220,77 @@ def validate(paths: list[pathlib.Path] = typer.Argument(None, help="yml files; d
 def shell() -> None:
     """Interactive REPL with TAB completion (commands, services, fields, resources)."""
     shell_mod.run(lambda argv: app(argv, standalone_mode=False))
+
+
+# --------------------------------------------------------------------------
+# service-first hierarchy: forge <service> <action> — tool → service →
+# parameter → treatment, mirroring how the work is thought about.
+RESERVED = {"manifest", "schema", "service", "validate", "shell", "help", "exit", "quit"}
+
+
+def _svc_show(service: str) -> None:
+    spec = spec_mod.load(service)
+    typer.echo(f"resource: {spec.resource or '(unset)'}   bind: {spec.bind.pattern}")
+    for k, v in spec.inputs.items():
+        kind = "plan" if v.plan_input else "user"
+        typer.echo(f"  {kind:8s} {k}")
+    for c in spec.bind.computed:
+        typer.echo(f"  {'computed':8s} {c.name} = {c.default}")
+    if spec.skipped_inputs:
+        typer.echo(f"  skipped   {', '.join(spec.skipped_inputs)}")
+
+
+def _svc_move(service: str, field: str, to: str, default: Optional[str]) -> None:
+    spec = spec_mod.load(service)
+    try:
+        spec = spec_mod.move(spec, field, to, default)
+    except ValueError as e:
+        typer.echo(str(e))
+        raise typer.Exit(1)
+    spec_mod.save(spec)
+    typer.echo(f"{service}.{field} -> {to}")
+    typer.echo(f"inputs:   {', '.join(f'{k} (plan)' if v.plan_input else k for k, v in spec.inputs.items()) or '(none)'}")
+    typer.echo(f"computed: {', '.join(c.name for c in spec.bind.computed) or '(none)'}")
+    typer.echo(f"skipped:  {', '.join(spec.skipped_inputs) or '(none)'}")
+
+
+def register_service_apps() -> None:
+    services_dir = pathlib.Path("services")
+    if not services_dir.exists():
+        return
+    for f in sorted(services_dir.glob("*.yaml")):
+        name = f.stem
+        if name in RESERVED:
+            continue
+
+        svc = typer.Typer(add_completion=False, no_args_is_help=True,
+                          help=f"the {name} service (spec: services/{name}.yaml)")
+
+        def build(nm: str):
+            @svc.command()
+            def show() -> None:
+                """Resource, parameters and their current treatment."""
+                _svc_show(nm)
+
+            @svc.command()
+            def move(field: str = typer.Argument(..., help="a parameter of the service"),
+                     to: str = typer.Option(..., "--to", help="user | plan | computed | skipped"),
+                     default: Optional[str] = typer.Option(
+                         None, "--default", help="computed expression, e.g. ${instance.details[id]}")) -> None:
+                """Reclassify one parameter."""
+                _svc_move(nm, field, to, default)
+
+            @svc.command()
+            def gen(write: bool = typer.Option(False, "--write"),
+                    check: bool = typer.Option(False, "--check")) -> None:
+                """Regenerate the definition and interfaces."""
+                raise typer.Exit(generate.run(spec_mod.load(nm), write=write, check=check))
+
+        build(name)
+        app.add_typer(svc, name=name)
+
+
+register_service_apps()
 
 
 def main() -> None:

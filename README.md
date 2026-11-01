@@ -14,6 +14,23 @@ It removes the three pains of brokerpak work:
   input between `user`, `plan`, `computed` (platform input) and `skipped`
   freely, then regenerates.
 
+## Command order: tool → service → parameter → treatment
+
+Commands follow the order you think in. Every service in `services/` gets its
+own command group:
+
+```bash
+forge csms                          # what is csms? resource + each parameter's treatment
+forge csms move secret_text --to plan   # parameter next to its service, treatment last
+forge csms gen --write
+```
+
+`forge service new csms` walks the same order: pick the resource, read the
+**parameter table** (type, R/O/C/S flags, suggested treatment), then classify
+each argument as `user` / `plan` / `computed` (platform) / `skipped` — Enter
+accepts the suggestion. The legacy `forge service move csms field` form still
+works.
+
 ## The flow
 
 ```

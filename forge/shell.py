@@ -53,9 +53,21 @@ class Completer:
         # completing a fresh word: use tokens without the in-progress one
         done = parts[:-1] if text else parts
 
+        services = _service_names()
         if not done:
-            return TOP
+            return TOP + services
         head = done[0]
+
+        if head in services:
+            # forge <service> <action> — the service-first hierarchy
+            actions = ["show", "move", "gen"]
+            if len(done) == 1:
+                return actions
+            if done[1] == "move":
+                if len(done) == 2:
+                    return _fields(head)
+                return ["--to", "--default"] + MOVE_TARGETS
+            return []
 
         if head in ("exit", "quit", "help"):
             return []
