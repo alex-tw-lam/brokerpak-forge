@@ -192,6 +192,8 @@ def service_from_jsonschema(
     schema: pathlib.Path = typer.Argument(..., help="JSON Schema file (e.g. terraschema output)"),
     name: str = typer.Argument(..., help="service name"),
     resource: Optional[str] = typer.Option(None, "--resource", help="managed resource, for validation"),
+    module_dir: Optional[pathlib.Path] = typer.Option(
+        None, "--module-dir", help="provision module dir; outputs.tf is harvested into spec outputs"),
     write: bool = typer.Option(False, "--write", help="merge into services/<name>.yaml instead of printing"),
 ) -> None:
     """Turn a JSON Schema of module variables into spec inputs (paste-able)."""
@@ -216,17 +218,35 @@ def service_from_jsonschema(
                               sort_keys=False, default_flow_style=False, width=100))
         typer.echo(f"# paste into services/{name}.yaml, or re-run with --write")
         return
-    from .spec import ServiceSpec
+    from .spec import OutputSpec, ServiceSpec
     try:
         spec = spec_mod.load(name)
     except SystemExit:
-        spec = ServiceSpec(service=name, display_name=f"CSB {name}", description=f"CSB {name}",
+        from .spec import _uuid_placeholder
+        spec = ServiceSpec(service=name, id=_uuid_placeholder(),
+                           display_name=f"CSB {name}", description=f"CSB {name}",
                            tags=["hcs", name], resource=resource or "")
     spec.inputs.update(inputs)
     if resource:
         spec.resource = resource
+    if module_dir:
+        import re as _re
+        out_re = _re.compile(r'^output\s+"([^"]+)"\s*\{', _re.M)
+        prov_out = module_dir / "outputs.tf"
+        if prov_out.is_file():
+            names = out_re.findall(prov_out.read_text())
+            from .project import load as load_project
+            names += [n for n in load_project().standard_inputs if n not in names]
+            spec.outputs = [OutputSpec(field_name=n) for n in names] or spec.outputs
+            typer.echo(f"outputs:  {', '.join(names)} (module + platform echoes)")
+        bind_out = module_dir.parent / "bind" / "outputs.tf"
+        if bind_out.is_file():
+            names = out_re.findall(bind_out.read_text())
+            spec.bind_outputs = [OutputSpec(field_name=n) for n in names] or spec.bind_outputs
+            typer.echo(f"bind outputs: {', '.join(names)} (from {bind_out})")
     out = spec_mod.save(spec)
     typer.echo(f"wrote {out} ({len(inputs)} inputs: {', '.join(inputs)})")
+    typer.echo(f"next: forge {name} gen --write")
 
 
 @service_app.command("import")
@@ -254,6 +274,7 @@ def service_gen(
     service: str = typer.Argument(...),
     write: bool = typer.Option(False, "--write"),
     check: bool = typer.Option(False, "--check"),
+    force: bool = typer.Option(False, "--force", help="replace module-owned variables.tf"),
 ) -> None:
     """Generate the definition yml, both variables.tf and the bind example."""
     spec = spec_mod.load(service)
@@ -266,7 +287,7 @@ def service_gen(
         for e in errs:
             typer.echo(f"FAIL {e}", err=True)
             raise typer.Exit(1)
-    raise typer.Exit(generate.run(spec, write=write, check=check))
+    raise typer.Exit(generate.run(spec, write=write, check=check, force=force))
 
 
 @app.command()
@@ -354,13 +375,18 @@ def register_service_apps() -> None:
 
             @svc.command()
             def gen(write: bool = typer.Option(False, "--write"),
-                    check: bool = typer.Option(False, "--check")) -> None:
+                    check: bool = typer.Option(False, "--check"),
+                    force: bool = typer.Option(False, "--force", help="replace module-owned variables.tf")) -> None:
                 """Regenerate the definition and interfaces."""
-                raise typer.Exit(generate.run(spec_mod.load(nm), write=write, check=check))
+                raise typer.Exit(generate.run(spec_mod.load(nm), write=write, check=check, force=force))
 
             @svc.command()
-            def scaffold(force: bool = typer.Option(False, "--force", help="overwrite existing files")) -> None:
-                """Stub the hand-written logic files (main/provider/versions/data/outputs)."""
+            def scaffold(force: bool = typer.Option(False, "--force", help="overwrite existing files"),
+                         ensure_vars: bool = typer.Option(False, "--ensure-vars",
+                                                          help="append missing platform variables to an adopted module")) -> None:
+                """Stub the hand-written logic files; --ensure-vars patches an adopted module."""
+                if ensure_vars:
+                    raise typer.Exit(scaffold_mod.ensure_vars(nm))
                 raise typer.Exit(scaffold_mod.run(nm, force))
 
         build(name)

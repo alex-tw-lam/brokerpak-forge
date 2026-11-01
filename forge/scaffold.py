@@ -91,6 +91,51 @@ def _outputs_tf(spec: ServiceSpec) -> str:
     return "\n".join(lines) + "\n"
 
 
+def ensure_vars(service: str) -> int:
+    """Append any variables the definition declares but the (adopted) module
+    does not have — the platform inputs and the tagging trio."""
+    import re
+    from .generate import _tf_var_body
+    prov_dir = ROOT / "terraform" / service / "provision"
+    var_file = prov_dir / "variables.tf"
+    if not var_file.is_file():
+        print(f"no {var_file} — nothing to ensure")
+        return 0
+    have = set(re.findall(r'^variable\s+"([^"]+)"', var_file.read_text(), re.M))
+    want: list[tuple[str, str, str, str | None]] = [
+        ("region", "string", "The platform region.", None),
+        ("cloud", "string", "The platform cloud.", None),
+        ("project_name", "string", "The platform project_name.", None),
+        ("labels", "map(any)", "Labels to apply as tags.", None),
+        ("request_context_json", "string", "JSON of the OSB request context.", '""'),
+        ("originating_identity_json", "string", "JSON of the OSB originating identity.", '""'),
+    ]
+    bind_var_file = ROOT / "terraform" / service / "bind" / "variables.tf"
+    missing = [w for w in want if w[0] not in have]
+    if missing:
+        with var_file.open("a") as f:
+            f.write("\n# --- platform inputs (forge ensure-vars) ---\n")
+            for name, typ, desc, default in missing:
+                f.write(_tf_var_body(name, typ, desc, default) + "\n")
+        print(f"appended to {var_file.relative_to(ROOT)}: {', '.join(m[0] for m in missing)}")
+    else:
+        print("all platform variables already declared")
+
+    # echo outputs: the bind computed inputs pull the platform values from
+    # instance.details, so an adopted module must output them
+    from .project import load as load_project
+    out_file = prov_dir / "outputs.tf"
+    have_out = set(re.findall(r'^output\s+"([^"]+)"', out_file.read_text(), re.M)) if out_file.is_file() else set()
+    missing_out = [n for n in load_project().standard_inputs if n not in have_out]
+    if missing_out and out_file.is_file():
+        with out_file.open("a") as f:
+            f.write("\n# --- platform echoes (forge ensure-vars) ---\n")
+            for n in missing_out:
+                f.write(f'output "{n}" {{\n  value = var.{n}\n}}\n\n')
+        print(f"appended to {out_file.relative_to(ROOT)}: {', '.join(missing_out)} outputs")
+    return 0
+
+
 def run(service: str, force: bool) -> int:
     proj = load_project()
     spec = load_spec(service)
