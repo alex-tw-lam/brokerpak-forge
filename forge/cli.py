@@ -225,6 +225,13 @@ def check() -> None:
 
 
 @app.command()
+def tui() -> None:
+    """A Textual cockpit: services sidebar, scrolling log, TAB completion."""
+    from .tui import ForgeTUI
+    ForgeTUI(lambda argv: app(argv, standalone_mode=False)).run()
+
+
+@app.command()
 def shell() -> None:
     """Interactive REPL with TAB completion (commands, services, fields, resources)."""
     shell_mod.run(lambda argv: app(argv, standalone_mode=False))

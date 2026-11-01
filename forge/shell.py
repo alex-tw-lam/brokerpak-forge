@@ -8,7 +8,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 
-TOP = ["manifest", "schema", "service", "validate", "check", "shell", "help", "exit", "quit"]
+TOP = ["manifest", "schema", "service", "validate", "check", "shell", "tui", "help", "exit", "quit"]
 SCHEMA_SUB = ["extract", "list", "show"]
 SERVICE_SUB = ["new", "move", "show", "gen", "import", "scaffold"]
 ACTIONS = ["show", "move", "gen", "scaffold"]

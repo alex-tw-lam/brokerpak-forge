@@ -32,6 +32,7 @@ forge csms scaffold             # stub the module logic files
 forge check                     # schema + sync + drift gates
 
 forge shell                     # REPL with TAB completion
+forge tui                       # Textual cockpit (sidebar + scrolling log)
 ```
 
 `forge service import hcs-csms.yml` adopts an existing hand-written definition.
