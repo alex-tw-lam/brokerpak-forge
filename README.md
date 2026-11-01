@@ -1,152 +1,36 @@
 # brokerpak-forge
 
 A CLI for authoring [Cloud Service Broker](https://github.com/cloudfoundry/cloud-service-broker)
-brokerpaks — **start from provider binaries, end with a brokerpak**.
+brokerpaks — start from provider binaries, end with a brokerpak.
 
-It removes the three pains of brokerpak work:
+## Install
 
-- **Not knowing what the provider offers** → offline schema queries with
-  required/optional/computed/sensitive flags per argument.
-- **Hand-writing parallel descriptions of one interface** → one small
-  `services/<svc>.yaml` spec generates the definition yml, both `variables.tf`
-  and the bind example.
-- **Inputs landing in the wrong category** → `service move` reclassifies any
-  input between `user`, `plan`, `computed` (platform input) and `skipped`
-  freely, then regenerates.
-
-## Command order: tool → service → parameter → treatment
-
-Commands follow the order you think in. Every service in `services/` gets its
-own command group:
+Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
-forge csms                          # what is csms? resource + each parameter's treatment
-forge csms move secret_text --to plan   # parameter next to its service, treatment last
-forge csms gen --write
-```
-
-`forge service new csms` walks the same order: pick the resource, read the
-**parameter table** (type, R/O/C/S flags, suggested treatment), then classify
-each argument as `user` / `plan` / `computed` (platform) / `skipped` — Enter
-accepts the suggestion. The legacy `forge service move csms field` form still
-works.
-
-## The flow
-
-```
- ./bin (staged release binaries)
-   │
-   ▼
- forge manifest --write            → manifest.yml
-   │
-   ▼
- forge schema extract              → schema/*.json (offline mirror, no network)
- forge schema list / show          → pick a resource, read its arguments
-   │
-   ▼
- forge service new csms            → services/csms.yaml (draft, classified)
- forge service move csms name --to plan
- forge service move csms name --to computed --default '${instance.details["name"]}'
-   │
-   ▼
- forge service gen csms --write    → hcs-csms.yml + variables.tf ×2 + bind example
-```
-
-## Editing over time (round-trips)
-
-Neither artefact is write-once:
-
-- **manifest**: `forge manifest --write` *merges* into an existing
-  `manifest.yml`. Staged binaries are refreshed/added; everything you
-  hand-edited survives — extra platforms, `terraform_upgrade_path`,
-  `required_env_vars`, `env_config_mapping` tweaks, unknown binary entries,
-  metadata. It prints what it added/updated/kept.
-- **definitions**: edit the spec (`services/<svc>.yaml`), or use
-  `service move`, then `service gen --write` again — `gen --check` is the
-  CI drift gate. To adopt a **hand-written** definition from an existing
-  brokerpak:
-
-  ```bash
-  forge service import hcs-csms.yml --name csms   # yml -> spec
-  forge service gen csms --write                  # spec -> yml (idempotent)
-  ```
-
-  The import → generate round-trip reproduces the original definition
-  semantically (ids, plans, inputs, defaults, computed inputs, outputs).
-
-## Shell mode & completion
-
-```bash
-forge shell
-```
-
-A REPL with **TAB completion that knows the context**: after `service move ` it
-completes your service names, after `service move csms ` the fields of that
-spec (user, plan, computed and skipped alike), after `--to ` the four
-categories, and after `schema show ` every resource in the extracted schema.
-History persists in `~/.forge_history`.
-
-For OS-level completion of the CLI itself, typer ships it:
-
-```bash
-forge --install-completion   # bash / zsh / fish; restart the shell
-```
-
-## Install & use
-
-Managed with [uv](https://docs.astral.sh/uv/):
-
-```bash
-uv sync                                   # create .venv from uv.lock
+uv sync
 uv run forge --help
-# or install the entry point into the venv:
-uv pip install -e . && forge --help
 ```
 
-Typical session in a brokerpak directory:
+## Usage
+
+Run inside a brokerpak directory (`./bin`, `manifest.yml`, `services/`,
+`terraform/`):
 
 ```bash
-cd your-brokerpak-dir
-uv run --project /path/to/brokerpak-forge forge manifest --bin-dir ./bin --org huaweicloud --write
-uv run --project /path/to/brokerpak-forge forge schema extract
-uv run --project /path/to/brokerpak-forge forge service new myservice
-uv run --project /path/to/brokerpak-forge forge myservice gen --write
+forge manifest --write          # ./bin binaries -> manifest.yml
+forge schema extract            # offline provider schema
+forge schema list / show NAME   # discover resources and their arguments
+
+forge service new csms          # wizard: resource -> parameters -> treatment
+forge csms move <param> --to user|plan|computed|skipped
+forge csms gen --write          # definition yml + variables.tf + bind example
+forge csms scaffold             # stub the module logic files
+forge check                     # schema + sync + drift gates
+
+forge shell                     # REPL with TAB completion
 ```
 
-Every generated file is idempotent — `forge service gen <svc> --check` is a CI
-drift gate. Still hand-written (service logic): `main.tf`, `data.tf`,
-`outputs.tf`, `provider.tf`, `versions.tf`.
-
-## Input categories
-
-| Category | Where it lands | Set by |
-|---|---|---|
-| `user` | provision `user_inputs` — per ServiceInstance parameter | the instance creator |
-| `plan` | provision `plan_inputs` — fixed by the chosen plan | the operator's plan definitions |
-| `computed` (platform) | `computed_inputs` — HIL expression, e.g. `${instance.details["id"]}` or `${config("hcs.region")}` | the broker |
-| `skipped` | not exposed; a module-internal default in `main.tf` | nobody — that's the point |
-
-`forge service move <svc> <field> --to user|plan|computed|skipped` moves any
-field between categories; `--default` supplies the HIL expression when moving to
-`computed`.
-
-## Conventions
-
-- Working directory is the brokerpak repo root (`manifest.yml`, `services/`,
-  `terraform/`, `examples/` live there).
-- `forge.yaml` (optional) overrides the defaults: `provider`, `provider_source`,
-  `definition_prefix`, `standard_inputs`.
-- The five bind patterns (passthrough / mint / grant / register / read-back) are
-  a property of the spec — see the companion docs in the brokerpak repos.
-
-## Validation
-
-CSB enforces the yml formats via Go structs at pak build time — late and terse.
-forge vendors equivalent JSON Schemas (derived from those structs, hardened
-against the official AWS/Azure/GCP brokerpak definitions):
-
-    forge validate                      # manifest + service definitions in cwd
-    forge validate path/to/file.yml     # explicit files
-
-Validation also runs automatically when generating (`manifest --write`,
-`service gen --write`), so invalid files cannot be produced.
+`forge service import hcs-csms.yml` adopts an existing hand-written definition.
+Every service in `services/` gets its own command group; `forge check` is the
+CI gate.
