@@ -31,6 +31,13 @@ each argument as `user` / `plan` / `computed` (platform) / `skipped` — Enter
 accepts the suggestion. The legacy `forge service move csms field` form still
 works.
 
+## The SOP
+
+[docs/SOP.md](docs/SOP.md) is the operator's manual: zero → manifest → schema
+→ service → scaffold → `forge check` → `pak build`, one command per step. If a
+step ever cannot be written, the CLI gains a command — that is how `check` and
+`scaffold` were born.
+
 ## The flow
 
 ```

@@ -111,6 +111,8 @@ def draft(service: str, resource: str, attrs: dict[str, dict],
             name="default", id=_uuid_placeholder(), description=f"Default {service} plan",
             display_name="Default")],
         skipped_inputs=list(standard_inputs),
+        outputs=[OutputSpec(field_name=n, details=f"The platform {n}.")
+                 for n in standard_inputs],
     )
     treatments = treatments or {}
     for arg, meta in sorted(attrs.items()):
@@ -125,6 +127,7 @@ def draft(service: str, resource: str, attrs: dict[str, dict],
             spec.inputs[arg] = InputSpec(
                 maps_to=arg, details=f"{arg} of {resource}.",
                 description=f"{arg} of {resource}.",
+                required=bool(meta.get("required")),
                 rationale="required argument of the resource")
         elif treatment == "plan":
             spec.inputs[arg] = InputSpec(

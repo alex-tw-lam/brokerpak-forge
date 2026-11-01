@@ -60,7 +60,7 @@ class Completer:
 
         if head in services:
             # forge <service> <action> — the service-first hierarchy
-            actions = ["show", "move", "gen"]
+            actions = ["show", "move", "gen", "scaffold"]
             if len(done) == 1:
                 return actions
             if done[1] == "move":

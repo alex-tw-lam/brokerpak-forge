@@ -14,6 +14,8 @@ import typer
 import yaml
 
 from . import generate, manifest as manifest_mod, project as project_mod, schema as schema_mod, shell as shell_mod, spec as spec_mod
+from . import check as check_mod
+from . import scaffold as scaffold_mod
 from . import validate as validate_mod
 
 app = typer.Typer(no_args_is_help=True,
@@ -217,6 +219,12 @@ def validate(paths: list[pathlib.Path] = typer.Argument(None, help="yml files; d
 
 
 @app.command()
+def check() -> None:
+    """One gate: yml schema validity + yml/module sync + generation drift."""
+    raise typer.Exit(check_mod.run())
+
+
+@app.command()
 def shell() -> None:
     """Interactive REPL with TAB completion (commands, services, fields, resources)."""
     shell_mod.run(lambda argv: app(argv, standalone_mode=False))
@@ -285,6 +293,11 @@ def register_service_apps() -> None:
                     check: bool = typer.Option(False, "--check")) -> None:
                 """Regenerate the definition and interfaces."""
                 raise typer.Exit(generate.run(spec_mod.load(nm), write=write, check=check))
+
+            @svc.command()
+            def scaffold(force: bool = typer.Option(False, "--force", help="overwrite existing files")) -> None:
+                """Stub the hand-written logic files (main/provider/versions/data/outputs)."""
+                raise typer.Exit(scaffold_mod.run(nm, force))
 
         build(name)
         app.add_typer(svc, name=name)

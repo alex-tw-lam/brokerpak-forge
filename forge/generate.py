@@ -64,7 +64,8 @@ def _input_entry(fname: str, inp) -> dict:
     entry = {"field_name": fname, "type": inp.type}
     if inp.details:
         entry["details"] = inp.details
-    if inp.nullable:
+    if inp.nullable or (not inp.required and inp.default is None):
+        # forge convention: every exposed optional carries a default
         entry["nullable"] = True
         entry["default"] = inp.default
     elif inp.default is not None:
