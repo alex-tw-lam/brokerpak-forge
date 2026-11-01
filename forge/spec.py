@@ -6,7 +6,7 @@ from typing import Any, Literal, Optional
 import yaml
 from pydantic import BaseModel, Field
 
-BindPattern = Literal["passthrough", "mint", "grant", "register", "read-back"]
+BindPattern = Literal["passthrough", "mint", "grant", "register", "read-back", "imported"]
 SERVICES_DIR = pathlib.Path("services")
 
 
@@ -153,3 +153,69 @@ def move(spec: ServiceSpec, field: str, to: str, default: Optional[str]) -> Serv
         spec.bind.computed.append(ComputedSpec(name=field, default=expr))
     return spec
 
+
+
+def _input_from_entry(e: dict, plan_input: bool) -> "InputSpec":
+    return InputSpec(
+        field_name=e.get("field_name"),
+        type=e.get("type", "string"),
+        details=e.get("details", ""),
+        description=e.get("details", ""),
+        default=e.get("default") if "default" in e else None,
+        nullable=bool(e.get("nullable")),
+        required=bool(e.get("required")),
+        prohibit_update=bool(e.get("prohibit_update")),
+        plan_updateable=bool(e.get("plan_updateable")),
+        plan_input=plan_input,
+        enum=e.get("enum"),
+        constraints=e.get("constraints"),
+    )
+
+
+def import_definition(doc: dict, proj) -> "ServiceSpec":
+    """Adopt an existing hand-written definition yml as a spec, so the service
+    can be regenerated (and continuously edited) from services/<svc>.yaml."""
+    name = doc.get("name", "")
+    prefix = proj.definition_prefix
+    service = name[len(prefix) + 1:] if prefix and name.startswith(prefix + "-") else name
+
+    inputs: dict[str, InputSpec] = {}
+    prov = doc.get("provision", {})
+    for e in prov.get("plan_inputs", []) + prov.get("user_inputs", []):
+        fname = e["field_name"]
+        if fname in proj.standard_inputs:
+            continue  # regenerated automatically
+        inputs[fname] = _input_from_entry(e, plan_input=e in prov.get("plan_inputs", []))
+
+    bind_sec = doc.get("bind", {})
+    bind_inputs = {e["field_name"]: _input_from_entry(e, plan_input=False)
+                   for e in bind_sec.get("user_inputs", []) + bind_sec.get("plan_inputs", [])
+                   if e["field_name"] not in proj.standard_inputs}
+    computed = [ComputedSpec(name=c["name"], default=c.get("default", ""),
+                             type=c.get("type", "string"))
+                for c in bind_sec.get("computed_inputs", [])
+                if c["name"] not in proj.standard_inputs]
+
+    return ServiceSpec(
+        service=service,
+        id=doc.get("id", ""),
+        display_name=doc.get("display_name", ""),
+        description=doc.get("description", ""),
+        tags=doc.get("tags", []),
+        provider_display_name=doc.get("provider_display_name", ""),
+        image_url=doc.get("image_url", ""),
+        documentation_url=doc.get("documentation_url", ""),
+        support_url=doc.get("support_url", ""),
+        plan_updateable=bool(doc.get("plan_updateable")),
+        plans=[PlanSpec(name=p["name"], id=p["id"], description=p.get("description", ""),
+                        display_name=p.get("display_name"), properties=p.get("properties", {}))
+               for p in doc.get("plans", [])],
+        inputs=inputs,
+        outputs=[OutputSpec(field_name=o["field_name"], type=o.get("type", "string"),
+                            details=o.get("details", ""))
+                 for o in prov.get("outputs", [])],
+        bind=BindSpec(pattern="imported", inputs=bind_inputs, computed=computed),
+        bind_outputs=[OutputSpec(field_name=o["field_name"], type=o.get("type", "string"),
+                                 details=o.get("details", ""))
+                      for o in bind_sec.get("outputs", [])],
+    )

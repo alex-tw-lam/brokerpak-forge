@@ -35,6 +35,28 @@ It removes the three pains of brokerpak work:
  forge service gen csms --write    → hcs-csms.yml + variables.tf ×2 + bind example
 ```
 
+## Editing over time (round-trips)
+
+Neither artefact is write-once:
+
+- **manifest**: `forge manifest --write` *merges* into an existing
+  `manifest.yml`. Staged binaries are refreshed/added; everything you
+  hand-edited survives — extra platforms, `terraform_upgrade_path`,
+  `required_env_vars`, `env_config_mapping` tweaks, unknown binary entries,
+  metadata. It prints what it added/updated/kept.
+- **definitions**: edit the spec (`services/<svc>.yaml`), or use
+  `service move`, then `service gen --write` again — `gen --check` is the
+  CI drift gate. To adopt a **hand-written** definition from an existing
+  brokerpak:
+
+  ```bash
+  forge service import hcs-csms.yml --name csms   # yml -> spec
+  forge service gen csms --write                  # spec -> yml (idempotent)
+  ```
+
+  The import → generate round-trip reproduces the original definition
+  semantically (ids, plans, inputs, defaults, computed inputs, outputs).
+
 ## Shell mode & completion
 
 ```bash

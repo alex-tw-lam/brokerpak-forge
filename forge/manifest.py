@@ -114,14 +114,71 @@ def build_manifest(binaries: list[dict], pak_name: str, org: Optional[str],
     return doc
 
 
-def run(bin_dir: pathlib.Path, pak_name: str, org: Optional[str],
-        author: str, description: str, write: bool) -> None:
+def merge_manifest(existing: dict, binaries: list[dict], pak_name: Optional[str],
+                   org: Optional[str], author: Optional[str],
+                   description: Optional[str]) -> tuple[dict, list[str]]:
+    """Update an existing manifest in place: refresh/add binary entries for what
+    is staged, keep everything the operator hand-edited (extra platforms, upgrade
+    paths, env mappings, unknown binary entries, metadata tweaks)."""
+    notes: list[str] = []
+    doc = dict(existing)
+    if pak_name:
+        doc["name"] = pak_name
+        notes.append(f"name -> {pak_name}")
+    if author or description:
+        meta = dict(doc.get("metadata", {}))
+        if author:
+            meta["author"] = author
+        if description:
+            meta["description"] = description
+        doc["metadata"] = meta
+
+    fresh = build_manifest(binaries, doc.get("name", "hcs-services"), org,
+                           author or "", description or "")
+    old_keys = {(b["name"], b["version"]) for b in doc.get("terraform_binaries", [])}
+    new_keys = {(b["name"], b["version"]) for b in fresh["terraform_binaries"]}
+
+    binaries_out = list(doc.get("terraform_binaries", []))
+    by_key = {(b["name"], b["version"]): b for b in binaries_out}
+    for entry in fresh["terraform_binaries"]:
+        key = (entry["name"], entry["version"])
+        if key in by_key:
+            # keep any operator additions on the old entry, refresh the rest
+            merged = {**entry, **{k: v for k, v in by_key[key].items() if k not in entry}}
+            notes.append(f"updated   {key[0]} {key[1]}")
+            binaries_out[binaries_out.index(by_key[key])] = merged
+        else:
+            binaries_out.append(entry)
+            notes.append(f"added     {key[0]} {key[1]}")
+    for key in sorted(old_keys - new_keys):
+        notes.append(f"kept      {key[0]} {key[1]} (not staged; untouched)")
+    doc["terraform_binaries"] = binaries_out
+
+    # keep exactly one default tofu when none is marked
+    tofus = [b for b in doc["terraform_binaries"] if b["name"] == "tofu"]
+    if tofus and not any(b.get("default") for b in tofus):
+        tofus[0]["default"] = True
+        notes.append("marked    default tofu")
+    return doc, notes
+
+
+def run(bin_dir: pathlib.Path, pak_name: Optional[str], org: Optional[str],
+        author: Optional[str], description: Optional[str], write: bool) -> None:
     binaries = parse_bin_dir(bin_dir)
     if not binaries:
         die(f"no staged binaries recognised in {bin_dir}")
-    doc = build_manifest(binaries, pak_name, org, author, description)
+
+    manifest_path = pathlib.Path("manifest.yml")
+    if manifest_path.exists():
+        existing = yaml.safe_load(manifest_path.read_text()) or {}
+        doc, notes = merge_manifest(existing, binaries, pak_name, org, author, description)
+        for n in notes:
+            print(n)
+    else:
+        doc = build_manifest(binaries, pak_name or "hcs-services", org,
+                             author or "CHANGE_ME", description or "Cloud Service Broker pak")
     text = yaml.dump(doc, sort_keys=False, default_flow_style=False, width=100)
     if write:
-        pathlib.Path("manifest.yml").write_text(text)
+        manifest_path.write_text(text)
         print("wrote manifest.yml")
     print(text)

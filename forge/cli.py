@@ -29,13 +29,14 @@ app.add_typer(service_app, name="service")
 @app.command()
 def manifest(
     bin_dir: pathlib.Path = typer.Option(pathlib.Path("bin"), "--bin-dir"),
-    name: str = typer.Option("hcs-services", "--name"),
+    name: Optional[str] = typer.Option(None, "--name", help="only applied when set (existing value kept otherwise)"),
     org: Optional[str] = typer.Option(None, "--org", help="github org of the providers, e.g. huaweicloud"),
-    author: str = typer.Option("CHANGE_ME", "--author"),
-    description: str = typer.Option("Cloud Service Broker pak", "--description"),
+    author: Optional[str] = typer.Option(None, "--author"),
+    description: Optional[str] = typer.Option(None, "--description"),
     write: bool = typer.Option(False, "--write"),
 ) -> None:
-    """Fill in manifest.yml from a directory of staged release binaries."""
+    """Create manifest.yml from staged binaries, or merge into the existing one
+    (hand-edited fields and unknown binary entries are preserved)."""
     manifest_mod.run(bin_dir, name, org, author, description, write)
     if write:
         from .validate import validate_file
@@ -136,6 +137,26 @@ def service_show(service: str = typer.Argument(...)) -> None:
         typer.echo(f"  {'computed':8s} {c.name} = {c.default}")
     if spec.skipped_inputs:
         typer.echo(f"  skipped   {', '.join(spec.skipped_inputs)}")
+
+
+@service_app.command("import")
+def service_import(
+    path: pathlib.Path = typer.Argument(..., help="existing definition yml, e.g. hcs-csms.yml"),
+    name: Optional[str] = typer.Option(None, "--name", help="service name override (default: derived from the definition)"),
+) -> None:
+    """Adopt an existing hand-written definition as a spec, then keep editing
+    via move/gen instead of the yml itself."""
+    import yaml as _yaml
+    from .project import load as load_project
+    from .spec import import_definition
+    spec = import_definition(_yaml.safe_load(path.read_text()) or {}, load_project())
+    if name:
+        spec.service = name
+    out = spec_mod.save(spec)
+    typer.echo(f"wrote {out} (resource unknown — set it, or add maps_to for renames)")
+    typer.echo(f"inputs:   {', '.join(f'{k} (plan)' if v.plan_input else k for k, v in spec.inputs.items()) or '(none)'}")
+    typer.echo(f"computed: {', '.join(c.name for c in spec.bind.computed) or '(none)'}")
+    typer.echo(f"next: forge service gen {spec.service} --write")
 
 
 @service_app.command("gen")
