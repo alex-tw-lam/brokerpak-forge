@@ -11,8 +11,10 @@ import pathlib
 from typing import Optional
 
 import typer
+import yaml
 
 from . import generate, manifest as manifest_mod, project as project_mod, schema as schema_mod, shell as shell_mod, spec as spec_mod
+from . import validate as validate_mod
 
 app = typer.Typer(no_args_is_help=True,
                   help="brokerpak authoring: binaries in, brokerpak out. Try `forge shell`.")
@@ -35,6 +37,11 @@ def manifest(
 ) -> None:
     """Fill in manifest.yml from a directory of staged release binaries."""
     manifest_mod.run(bin_dir, name, org, author, description, write)
+    if write:
+        from .validate import validate_file
+        errors = validate_file(pathlib.Path("manifest.yml"), "brokerpak-manifest.schema.json")
+        for e in errors:
+            typer.echo(f"FAIL {e}", err=True)
 
 
 # -------------------------------------------------------------------- schema
@@ -139,7 +146,20 @@ def service_gen(
 ) -> None:
     """Generate the definition yml, both variables.tf and the bind example."""
     spec = spec_mod.load(service)
+    if write or check:
+        from .validate import validate_document
+        from .project import load as load_project
+        doc = yaml.safe_load(generate.gen_definition(spec, load_project()))
+        for e in validate_document(doc, "service-definition.schema.json", f"{service} (generated)"):
+            typer.echo(f"FAIL {e}", err=True)
+            raise typer.Exit(1)
     raise typer.Exit(generate.run(spec, write=write, check=check))
+
+
+@app.command()
+def validate(paths: list[pathlib.Path] = typer.Argument(None, help="yml files; default: manifest + hcs-*.yml in cwd")) -> None:
+    """Validate manifests and service definitions against the vendored JSON Schemas."""
+    raise typer.Exit(validate_mod.run(paths or []))
 
 
 @app.command()

@@ -3,7 +3,7 @@ import pathlib
 import readline
 import sys
 
-TOP = ["manifest", "schema", "service", "help", "exit", "quit"]
+TOP = ["manifest", "schema", "service", "validate", "help", "exit", "quit"]
 SCHEMA_SUB = ["extract", "list", "show"]
 SERVICE_SUB = ["new", "move", "show", "gen"]
 MOVE_TARGETS = ["user", "plan", "computed", "skipped"]
@@ -58,6 +58,8 @@ class Completer:
         head = done[0]
 
         if head in ("exit", "quit", "help"):
+            return []
+        if head == "validate":
             return []
         if head == "manifest":
             return ["--bin-dir", "--name", "--org", "--author", "--description", "--write"]

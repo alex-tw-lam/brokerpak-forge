@@ -89,3 +89,15 @@ field between categories; `--default` supplies the HIL expression when moving to
   `definition_prefix`, `standard_inputs`.
 - The five bind patterns (passthrough / mint / grant / register / read-back) are
   a property of the spec — see the companion docs in the brokerpak repos.
+
+## Validation
+
+CSB enforces the yml formats via Go structs at pak build time — late and terse.
+forge vendors equivalent JSON Schemas (derived from those structs, hardened
+against the official AWS/Azure/GCP brokerpak definitions):
+
+    forge validate                      # manifest + service definitions in cwd
+    forge validate path/to/file.yml     # explicit files
+
+Validation also runs automatically when generating (`manifest --write`,
+`service gen --write`), so invalid files cannot be produced.
