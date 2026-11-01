@@ -244,6 +244,20 @@ def import_definition(doc: dict, proj) -> "ServiceSpec":
     )
 
 
+def check_jsonschema(doc) -> None:
+    """Validate that the input really is a JSON Schema before converting."""
+    from jsonschema.exceptions import SchemaError
+    from jsonschema.validators import validator_for
+    if not isinstance(doc, dict):
+        raise ValueError("the file is not a JSON object")
+    try:
+        validator_for(doc).check_schema(doc)
+    except SchemaError as e:
+        raise ValueError(f"not a valid JSON Schema: {e.message} (at /{'/'.join(map(str, e.path))})")
+    if doc.get("type") not in (None, "object"):
+        raise ValueError(f"expected an object schema, got type {doc.get('type')!r}")
+
+
 def inputs_from_jsonschema(doc: dict) -> dict[str, "InputSpec"]:
     """Convert a JSON Schema describing module variables (e.g. terraschema
     output) into spec input entries."""

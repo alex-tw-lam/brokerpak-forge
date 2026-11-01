@@ -197,8 +197,14 @@ def service_from_jsonschema(
     """Turn a JSON Schema of module variables into spec inputs (paste-able)."""
     import json as _json
     import yaml as _yaml
-    from .spec import inputs_from_jsonschema
-    inputs = inputs_from_jsonschema(_json.loads(schema.read_text()))
+    from .spec import check_jsonschema, inputs_from_jsonschema
+    doc = _json.loads(schema.read_text())
+    try:
+        check_jsonschema(doc)
+    except ValueError as e:
+        typer.echo(f"{schema.name}: {e}")
+        raise typer.Exit(1)
+    inputs = inputs_from_jsonschema(doc)
     if not inputs:
         typer.echo("no properties found in the schema")
         raise typer.Exit(1)
