@@ -82,6 +82,20 @@ def _input_entry(fname: str, inp) -> dict:
     return entry
 
 
+def bind_computed(spec: ServiceSpec, proj: Project) -> list:
+    """Bind computed inputs: spec entries plus the platform inputs, which the
+    bind template declares as variables and CSB requires to be fed (from the
+    provision run's outputs)."""
+    from .spec import ComputedSpec
+    computed = list(spec.bind.computed)
+    have = {c.name for c in computed}
+    for name in proj.standard_inputs:
+        if name not in have:
+            computed.append(ComputedSpec(name=name,
+                                         default=f'${{instance.details["{name}"]}}'))
+    return computed
+
+
 def gen_definition(spec: ServiceSpec, proj: Project) -> str:
     name = f"{proj.definition_prefix}-{spec.service}"
     doc = {"version": 1, "name": name, "id": spec.id,
@@ -131,8 +145,10 @@ def gen_definition(spec: ServiceSpec, proj: Project) -> str:
     doc["bind"] = {
         "plan_inputs": [],
         "user_inputs": [_input_entry(k, v) for k, v in spec.bind.inputs.items()],
-        "computed_inputs": [{"name": c.name, "default": c.default, "overwrite": True, "type": c.type}
-                            for c in spec.bind.computed],
+        "computed_inputs": [
+            {"name": c.name, "default": c.default, "overwrite": True, "type": c.type}
+            for c in bind_computed(spec, proj)
+        ],
         "template_refs": {k: f"terraform/{spec.service}/bind/{k}.tf"
                           for k in ("main", "variables", "outputs", "provider", "versions", "data")},
         "outputs": [{"field_name": o.field_name, "type": o.type, **({"details": o.details} if o.details else {})}

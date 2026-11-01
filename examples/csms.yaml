@@ -3,6 +3,10 @@ service: csms
 id: ffd9a343-2ed5-4dfd-a17e-bb3140568b18
 display_name: CSB HCS CSMS Secret
 description: CSB HCS CSMS Secret
+provider_display_name: Huawei Cloud Stack
+image_url: https://doc.hcs.huawei.com/index.html
+documentation_url: https://doc.hcs.huawei.com/index.html
+support_url: https://doc.hcs.huawei.com/index.html
 tags: [hcs, csms, secret, security]
 plan_updateable: true
 resource: hcs_csms_secret
@@ -37,7 +41,13 @@ inputs:
     description: KMS key ID used to encrypt the secret; CSMS default when null.
     prohibit_update: true
     rationale: sites with custom KMS keys
-skipped_inputs: [secret_binary, tags, description]
+  description:
+    type: string
+    nullable: true
+    details: Optional description of the secret.
+    description: Optional description of the secret.
+    rationale: free-form annotation per instance
+skipped_inputs: [secret_binary, tags]
 outputs:
 - {field_name: secret_id, details: ID of the CSMS secret}
 - {field_name: name, details: Name of the CSMS secret}
