@@ -187,6 +187,42 @@ def service_show(service: str = typer.Argument(...)) -> None:
         typer.echo(f"  skipped   {', '.join(spec.skipped_inputs)}")
 
 
+@service_app.command("from-jsonschema")
+def service_from_jsonschema(
+    schema: pathlib.Path = typer.Argument(..., help="JSON Schema file (e.g. terraschema output)"),
+    name: str = typer.Argument(..., help="service name"),
+    resource: Optional[str] = typer.Option(None, "--resource", help="managed resource, for validation"),
+    write: bool = typer.Option(False, "--write", help="merge into services/<name>.yaml instead of printing"),
+) -> None:
+    """Turn a JSON Schema of module variables into spec inputs (paste-able)."""
+    import json as _json
+    import yaml as _yaml
+    from .spec import inputs_from_jsonschema
+    inputs = inputs_from_jsonschema(_json.loads(schema.read_text()))
+    if not inputs:
+        typer.echo("no properties found in the schema")
+        raise typer.Exit(1)
+    if not write:
+        typer.echo(_yaml.dump({"inputs": {k: v.model_dump(exclude_none=True,
+                                                           exclude_defaults=True,
+                                                           exclude={"field_name"})
+                                          for k, v in inputs.items()}},
+                              sort_keys=False, default_flow_style=False, width=100))
+        typer.echo(f"# paste into services/{name}.yaml, or re-run with --write")
+        return
+    from .spec import ServiceSpec
+    try:
+        spec = spec_mod.load(name)
+    except SystemExit:
+        spec = ServiceSpec(service=name, display_name=f"CSB {name}", description=f"CSB {name}",
+                           tags=["hcs", name], resource=resource or "")
+    spec.inputs.update(inputs)
+    if resource:
+        spec.resource = resource
+    out = spec_mod.save(spec)
+    typer.echo(f"wrote {out} ({len(inputs)} inputs: {', '.join(inputs)})")
+
+
 @service_app.command("import")
 def service_import(
     path: pathlib.Path = typer.Argument(..., help="existing definition yml, e.g. hcs-csms.yml"),

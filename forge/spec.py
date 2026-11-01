@@ -242,3 +242,34 @@ def import_definition(doc: dict, proj) -> "ServiceSpec":
                                  details=o.get("details", ""))
                       for o in bind_sec.get("outputs", [])],
     )
+
+
+def inputs_from_jsonschema(doc: dict) -> dict[str, "InputSpec"]:
+    """Convert a JSON Schema describing module variables (e.g. terraschema
+    output) into spec input entries."""
+    type_map = {"string": "string", "number": "number", "integer": "integer",
+                "boolean": "boolean", "array": "array", "object": "object"}
+    required = set(doc.get("required", []))
+    out: dict[str, InputSpec] = {}
+    for name, p in (doc.get("properties") or {}).items():
+        if not isinstance(p, dict):
+            continue
+        t = p.get("type")
+        nullable = isinstance(t, list) and "null" in t
+        base = (t[0] if isinstance(t, list) else t) or "string"
+        enum = {str(v): str(v) for v in p["enum"]} if isinstance(p.get("enum"), list) else None
+        constraints = ({k: p[k] for k in ("minLength", "maxLength", "pattern") if k in p}
+                       if any(k in p for k in ("minLength", "maxLength", "pattern")) else None)
+        out[name] = InputSpec(
+            field_name=name,
+            type=type_map.get(base, "string"),
+            details=p.get("description", ""),
+            description=p.get("description", ""),
+            default=p.get("default") if "default" in p else None,
+            nullable=nullable,
+            required=name in required,
+            enum=enum,
+            constraints=constraints,
+            rationale="imported from JSON Schema",
+        )
+    return out

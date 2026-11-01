@@ -10,7 +10,7 @@ from prompt_toolkit.history import FileHistory
 
 TOP = ["add", "manifest", "schema", "service", "validate", "check", "shell", "tui", "help", "exit", "quit"]
 SCHEMA_SUB = ["extract", "list", "show"]
-SERVICE_SUB = ["new", "move", "show", "gen", "import", "scaffold"]
+SERVICE_SUB = ["new", "move", "show", "gen", "import", "from-jsonschema", "scaffold"]
 ACTIONS = ["show", "move", "gen", "scaffold"]
 MOVE_TARGETS = ["user", "plan", "computed", "skipped"]
 
