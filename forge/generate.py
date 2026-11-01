@@ -1,0 +1,198 @@
+"""Render a service spec into the brokerpak definition and module interfaces."""
+import json
+import pathlib
+from typing import Optional
+
+import yaml
+
+from .project import Project, load as load_project
+from .spec import ServiceSpec
+
+ROOT = pathlib.Path.cwd()
+
+HCL_TYPES = {"string": "string", "number": "number", "integer": "number",
+             "boolean": "bool", "object": "any", "array": "any"}
+INTERNAL_VARS = ["labels", "request_context_json", "originating_identity_json"]
+
+
+def _tf_var(name: str, hcl_type: str, description: str,
+            default: Optional[str] = None, nullable: bool = False) -> str:
+    lines = [f'variable "{name}" {{',
+             f"  description = {json.dumps(description)}",
+             f"  type        = {hcl_type}"]
+    if default is not None:
+        lines.append(f"  default     = {default}")
+    elif nullable:
+        lines.append("  default     = null")
+    lines.append("}\n")
+    return "\n".join(lines)
+
+
+def gen_provision_variables(spec: ServiceSpec, proj: Project) -> str:
+    out = []
+    for name in proj.standard_inputs:
+        out.append(_tf_var(name, "string", f"The platform {name}."))
+    for key, inp in spec.inputs.items():
+        out.append(_tf_var(key, inp.tf_type or HCL_TYPES[inp.type],
+                           inp.description or inp.details, nullable=inp.nullable))
+    out.append(_tf_var("labels", "map(any)", "Labels to apply as tags."))
+    out.append(_tf_var("request_context_json", "string",
+                       "JSON of the OSB request context.", default='""'))
+    out.append(_tf_var("originating_identity_json", "string",
+                       "JSON of the OSB originating identity.", default='""'))
+    return "\n".join(out)
+
+
+def gen_bind_variables(spec: ServiceSpec, proj: Project) -> str:
+    out = []
+    for name in proj.standard_inputs:
+        out.append(_tf_var(name, "string", f"The platform {name}."))
+    for key, inp in spec.bind.inputs.items():
+        if key in proj.standard_inputs:
+            continue
+        out.append(_tf_var(key, inp.tf_type or HCL_TYPES[inp.type],
+                           inp.description or inp.details, nullable=inp.nullable))
+    for comp in spec.bind.computed:
+        if comp.name in proj.standard_inputs:
+            continue
+        out.append(_tf_var(comp.name, HCL_TYPES.get(comp.type, "any"),
+                           "Pushed from the provision run by the broker."))
+    return "\n".join(out)
+
+
+def _input_entry(fname: str, inp) -> dict:
+    entry = {"field_name": fname, "type": inp.type}
+    if inp.details:
+        entry["details"] = inp.details
+    if inp.nullable:
+        entry["nullable"] = True
+        entry["default"] = inp.default
+    elif inp.default is not None:
+        entry["default"] = inp.default
+    if inp.required:
+        entry["required"] = True
+    if inp.enum:
+        entry["enum"] = inp.enum
+    if inp.constraints:
+        entry["constraints"] = inp.constraints
+    if inp.prohibit_update:
+        entry["prohibit_update"] = True
+    if inp.plan_updateable:
+        entry["plan_updateable"] = True
+    return entry
+
+
+def gen_definition(spec: ServiceSpec, proj: Project) -> str:
+    name = f"{proj.definition_prefix}-{spec.service}"
+    doc = {"version": 1, "name": name, "id": spec.id,
+           "description": spec.description, "display_name": spec.display_name}
+    if spec.image_url:
+        doc["image_url"] = spec.image_url
+    if spec.documentation_url:
+        doc["documentation_url"] = spec.documentation_url
+    if spec.provider_display_name:
+        doc["provider_display_name"] = spec.provider_display_name
+    if spec.support_url:
+        doc["support_url"] = spec.support_url
+    if spec.tags:
+        doc["tags"] = spec.tags
+    if spec.plan_updateable:
+        doc["plan_updateable"] = True
+    if spec.plans:
+        doc["plans"] = [{"name": p.name, "id": p.id, "description": p.description,
+                         "display_name": p.display_name or p.name, "properties": p.properties}
+                        for p in spec.plans]
+
+    plan_inputs = [_input_entry(k, v) for k, v in spec.inputs.items() if v.plan_input]
+    user_inputs = [_input_entry(k, v) for k, v in spec.inputs.items() if not v.plan_input]
+    for n in proj.standard_inputs:
+        user_inputs.append({"field_name": n, "type": "string",
+                            "details": f"The platform {n}.",
+                            "default": f"${{config(\"hcs.{n}\")}}",
+                            "prohibit_update": True})
+
+    doc["provision"] = {
+        "plan_inputs": plan_inputs,
+        "user_inputs": user_inputs,
+        "computed_inputs": [
+            {"name": "labels", "default": "${json.marshal(request.default_labels)}",
+             "overwrite": True, "type": "object"},
+            {"name": "request_context_json", "default": "${json.marshal(request.context)}",
+             "overwrite": True, "type": "string"},
+            {"name": "originating_identity_json",
+             "default": "${json.marshal(request.x_broker_api_originating_identity)}",
+             "overwrite": True, "type": "string"},
+        ],
+        "template_refs": {k: f"terraform/{spec.service}/provision/{k}.tf"
+                          for k in ("main", "variables", "outputs", "provider", "versions", "data")},
+        "outputs": [{"field_name": o.field_name, "type": o.type, **({"details": o.details} if o.details else {})}
+                    for o in spec.outputs],
+    }
+    doc["bind"] = {
+        "plan_inputs": [],
+        "user_inputs": [_input_entry(k, v) for k, v in spec.bind.inputs.items()],
+        "computed_inputs": [{"name": c.name, "default": c.default, "overwrite": True, "type": c.type}
+                            for c in spec.bind.computed],
+        "template_refs": {k: f"terraform/{spec.service}/bind/{k}.tf"
+                          for k in ("main", "variables", "outputs", "provider", "versions", "data")},
+        "outputs": [{"field_name": o.field_name, "type": o.type, **({"details": o.details} if o.details else {})}
+                    for o in spec.bind_outputs],
+    }
+    return yaml.dump(doc, sort_keys=False, default_flow_style=False, allow_unicode=True, width=100)
+
+
+def gen_bind_example(spec: ServiceSpec, proj: Project) -> str:
+    lines = [
+        "# -----------------------------------------------------------------------------",
+        f"# {proj.definition_prefix}-{spec.service} — bind ({spec.bind.pattern})",
+        f"# Run:  cd terraform/{spec.service}/bind",
+        "#       tofu init",
+        f"#       tofu plan  -var-file=../../../examples/shared.tfvars -var-file=../../../examples/{spec.service}/bind.tfvars",
+        f"#       tofu apply -var-file=../../../examples/shared.tfvars -var-file=../../../examples/{spec.service}/bind.tfvars",
+        "# Fill OUTPUT-* placeholders from the provision run's `tofu output`.",
+        "# -----------------------------------------------------------------------------",
+    ]
+    if spec.bind.inputs:
+        lines.append("# --- binding inputs ---")
+        for key, inp in spec.bind.inputs.items():
+            lines.append(f"# {key} = ..." if inp.default is None else f"{key} = {inp.default!r}")
+        lines.append("")
+    lines.append("# --- values from the provision run's outputs ---")
+    for comp in spec.bind.computed:
+        if comp.name in proj.standard_inputs:
+            continue
+        m = f'instance.details["'
+        key = comp.default.split(m)[1].split('"]')[0] if m in comp.default else comp.name
+        lines.append(f'{comp.name} = "OUTPUT-{key}"')
+    return "\n".join(lines) + "\n"
+
+
+def targets(spec: ServiceSpec, proj: Project) -> dict[pathlib.Path, str]:
+    stem = proj.definition_prefix.removeprefix("csb-")
+    return {
+        ROOT / f"{stem}-{spec.service}.yml": gen_definition(spec, proj),
+        ROOT / "terraform" / spec.service / "provision" / "variables.tf": gen_provision_variables(spec, proj),
+        ROOT / "terraform" / spec.service / "bind" / "variables.tf": gen_bind_variables(spec, proj),
+        ROOT / "examples" / spec.service / "bind.tfvars.example": gen_bind_example(spec, proj),
+    }
+
+
+def run(spec: ServiceSpec, write: bool, check: bool) -> int:
+    proj = load_project()
+    failed = 0
+    for path, content in targets(spec, proj).items():
+        rel = path.relative_to(ROOT)
+        if check:
+            if not path.exists():
+                print(f"MISS  {rel}")
+                failed += 1
+            elif path.read_text() != content:
+                print(f"DRIFT {rel} (regenerate with --write)")
+                failed += 1
+            else:
+                print(f"ok    {rel}")
+        if write:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+            print(f"wrote {rel}")
+    return 1 if (check and failed) else 0

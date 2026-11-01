@@ -1,0 +1,56 @@
+# Curated example spec (the csb-hcs-csms golden standard) — see README for the flow.
+service: csms
+id: ffd9a343-2ed5-4dfd-a17e-bb3140568b18
+display_name: CSB HCS CSMS Secret
+description: CSB HCS CSMS Secret
+tags: [hcs, csms, secret, security]
+plan_updateable: true
+resource: hcs_csms_secret
+plans:
+- name: default
+  id: 712128d0-eb3d-4f5e-a397-7fc71a678d50
+  description: Default CSMS secret plan
+  display_name: Default
+inputs:
+  secret_name:
+    maps_to: name
+    type: string
+    details: Name of the CSMS secret.
+    description: Name of the CSMS secret.
+    default: csb-${request.instance_id}
+    constraints:
+      minLength: 1
+      maxLength: 64
+      pattern: '^[a-zA-Z0-9_.-]+$'
+    prohibit_update: true
+    rationale: per-instance secret name
+  secret_text:
+    type: string
+    nullable: true
+    details: Secret plaintext. When empty, a random secret is generated. Updating the value creates a new secret version.
+    description: Secret plaintext; random when null.
+    rationale: callers may bring their own secret value
+  kms_key_id:
+    type: string
+    nullable: true
+    details: KMS key ID used to encrypt the secret. When empty, the CSMS default key is used.
+    description: KMS key ID used to encrypt the secret; CSMS default when null.
+    prohibit_update: true
+    rationale: sites with custom KMS keys
+skipped_inputs: [secret_binary, tags, description]
+outputs:
+- {field_name: secret_id, details: ID of the CSMS secret}
+- {field_name: name, details: Name of the CSMS secret}
+- {field_name: latest_version, details: Latest version of the secret}
+- {field_name: secret_text, details: Secret plaintext}
+- {field_name: region, details: HCS region}
+- {field_name: cloud, details: HCS cloud domain}
+- {field_name: project_name, details: HCS project name}
+bind:
+  pattern: read-back
+  computed:
+  - {name: secret_name, default: '${instance.details["name"]}'}
+bind_outputs:
+- {field_name: name, details: Name of the CSMS secret}
+- {field_name: value, details: Latest version plaintext of the secret}
+- {field_name: version, details: Version of the secret read back}
