@@ -35,6 +35,24 @@ It removes the three pains of brokerpak work:
  forge service gen csms --write    → hcs-csms.yml + variables.tf ×2 + bind example
 ```
 
+## Shell mode & completion
+
+```bash
+forge shell
+```
+
+A REPL with **TAB completion that knows the context**: after `service move ` it
+completes your service names, after `service move csms ` the fields of that
+spec (user, plan, computed and skipped alike), after `--to ` the four
+categories, and after `schema show ` every resource in the extracted schema.
+History persists in `~/.forge_history`.
+
+For OS-level completion of the CLI itself, typer ships it:
+
+```bash
+forge --install-completion   # bash / zsh / fish; restart the shell
+```
+
 ## Install & use
 
 ```bash

@@ -17,6 +17,10 @@ class Project(BaseModel):
         default_factory=lambda: ["region", "cloud", "project_name"],
         description="config-defaulted inputs every service gets (computed per platform)")
     tofu_version: Optional[str] = None          # filled from the manifest when present
+    env_config_mapping: dict[str, str] = Field(
+        default_factory=lambda: {"HCS_CLOUD": "hcs.cloud", "HCS_REGION_NAME": "hcs.region",
+                                 "HCS_PROJECT_NAME": "hcs.project_name"},
+        description="emitted into manifest.yml env_config_mapping; empty to omit")
 
 
 def load() -> Project:

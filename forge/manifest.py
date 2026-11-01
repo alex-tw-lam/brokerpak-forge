@@ -23,23 +23,31 @@ ORG_GUESSES = {"hcs": "huaweicloud", "google": "hashicorp", "azurerm": "hashicor
                "aws": "hashicorp", "random": "hashicorp"}
 
 
+def _binary_in(entry: pathlib.Path, stem: str) -> pathlib.Path | None:
+    """The actual executable inside a staged dir — name wins, never LICENSE.
+
+    Version-bearing names like terraform-provider-random_v3.9.0 end in `.0`,
+    which pathlib counts as a suffix, so suffix filtering cannot be used.
+    """
+    candidates = [p for p in entry.iterdir()
+                  if p.is_file() and p.name.startswith(stem)]
+    return candidates[0] if candidates else None
+
+
 def parse_bin_dir(bin_dir: pathlib.Path) -> list[dict]:
     """Return [{name, version, os, arch, file}] for every staged binary found."""
     found: dict[tuple[str, str, str, str], pathlib.Path] = {}
     for entry in sorted(bin_dir.iterdir()):
         stem = entry.name.removesuffix(".zip")
+        m = STAGED.match(stem)
+        if not m:
+            continue
         if entry.is_dir():
-            inner = [p for p in entry.iterdir() if p.is_file() and not p.suffix]
-            if not inner:
+            binary = _binary_in(entry, m["name"])
+            if binary is None:
                 continue
-            m = STAGED.match(entry.name)
-            if not m:
-                continue
-            found[(m["name"], m["version"], m["os"], m["arch"])] = inner[0]
+            found[(m["name"], m["version"], m["os"], m["arch"])] = binary
         else:
-            m = STAGED.match(stem)
-            if not m:
-                continue
             found[(m["name"], m["version"], m["os"], m["arch"])] = entry
     out = []
     for (name, version, os_, arch), path in sorted(found.items()):
@@ -47,12 +55,17 @@ def parse_bin_dir(bin_dir: pathlib.Path) -> list[dict]:
     return out
 
 
+def _namespace(short: str, org: Optional[str]) -> str:
+    """Built-in guesses win (hashicorp/random stays hashicorp even under
+    --org huaweicloud); --org fills in providers we do not know."""
+    return ORG_GUESSES.get(short) or org or short
+
+
 def _source_entry(name: str, org: Optional[str]) -> Optional[dict]:
     if name == "tofu":
         return None  # tofu has no provider address
     short = name.removeprefix("terraform-provider-")
-    ns = org or ORG_GUESSES.get(short, short)
-    return {"provider": f"{ns}/{short}"}
+    return {"provider": f"{_namespace(short, org)}/{short}"}
 
 
 def build_manifest(binaries: list[dict], pak_name: str, org: Optional[str],
@@ -75,21 +88,30 @@ def build_manifest(binaries: list[dict], pak_name: str, org: Optional[str],
             entry = {
                 "name": b["name"],
                 "version": b["version"],
-                "source": f"https://github.com/{(org or ORG_GUESSES.get(b['name'].removeprefix('terraform-provider-'), 'CHANGE_ME'))}"
+                "source": f"https://github.com/{_namespace(b['name'].removeprefix('terraform-provider-'), org)}"
                           f"/{b['name']}/archive/v{b['version']}.zip",
                 **(_source_entry(b["name"], org) or {}),
                 "url_template": "./bin/${name}_${version}_${os}_${arch}/${name}_v${version}",
             }
         entries.append(entry)
 
-    return {
+    from .project import load as load_project
+    proj = load_project()
+    stem = proj.definition_prefix.removeprefix("csb-")
+    definitions = sorted(p.name for p in pathlib.Path.cwd().glob(f"{stem}-*.yml"))
+
+    doc = {
         "packversion": 1,
         "name": pak_name,
         "version": "0.1.0",
         "metadata": {"author": author, "description": description},
         "platforms": [{"os": o, "arch": a} for o, a in platforms],
         "terraform_binaries": entries,
+        "service_definitions": definitions,
     }
+    if proj.env_config_mapping:
+        doc["env_config_mapping"] = proj.env_config_mapping
+    return doc
 
 
 def run(bin_dir: pathlib.Path, pak_name: str, org: Optional[str],

@@ -12,10 +12,10 @@ from typing import Optional
 
 import typer
 
-from . import generate, manifest as manifest_mod, project as project_mod, schema as schema_mod, spec as spec_mod
+from . import generate, manifest as manifest_mod, project as project_mod, schema as schema_mod, shell as shell_mod, spec as spec_mod
 
-app = typer.Typer(add_completion=False, no_args_is_help=True,
-                  help="brokerpak authoring: binaries in, brokerpak out.")
+app = typer.Typer(no_args_is_help=True,
+                  help="brokerpak authoring: binaries in, brokerpak out. Try `forge shell`.")
 schema_app = typer.Typer(add_completion=False, no_args_is_help=True, help="provider schema (S6)")
 service_app = typer.Typer(add_completion=False, no_args_is_help=True, help="service specs (S1)")
 app.add_typer(schema_app, name="schema")
@@ -140,6 +140,12 @@ def service_gen(
     """Generate the definition yml, both variables.tf and the bind example."""
     spec = spec_mod.load(service)
     raise typer.Exit(generate.run(spec, write=write, check=check))
+
+
+@app.command()
+def shell() -> None:
+    """Interactive REPL with TAB completion (commands, services, fields, resources)."""
+    shell_mod.run(lambda argv: app(argv, standalone_mode=False))
 
 
 def main() -> None:
