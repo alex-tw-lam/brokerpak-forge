@@ -29,11 +29,36 @@ def validate_document(doc: dict, schema_name: str, label: str) -> list[str]:
     return errors
 
 
-def validate_file(path: pathlib.Path, schema_name: str) -> list[str]:
+def check_optional_defaults(doc: dict, label: str) -> list[str]:
+    """Rule: an exposed optional input always carries a default (null counts).
+
+    Without one, "unset" reaches the module ambiguously — a non-required input
+    with no yml default relies on a tf default nobody can see from the catalog.
+    """
+    errors = []
+    for side in ("provision", "bind"):
+        for group in ("plan_inputs", "user_inputs"):
+            for i, entry in enumerate(doc.get(side, {}).get(group, [])):
+                if not entry.get("required") and "default" not in entry:
+                    errors.append(
+                        f"{label}: {side}/{group}/{i} {entry.get('field_name')!r}: "
+                        "optional input has no default (add default: null or a value)")
+    return errors
+
+
+def validate_file(path: pathlib.Path, schema_name: str) -> tuple[list[str], list[str]]:
+    """Return (errors, warnings)."""
     doc = yaml.safe_load(path.read_text())
     if not isinstance(doc, dict):
-        return [f"{path.name}: not a yml mapping"]
-    return validate_document(doc, schema_name, path.name)
+        return [f"{path.name}: not a yml mapping"], []
+    errors = validate_document(doc, schema_name, path.name)
+    warnings = []
+    if schema_name.startswith("service-definition"):
+        # Discipline, not a CSB requirement: official paks rely on tf defaults
+        # in 16 places, so this only warns for foreign files. forge-generated
+        # definitions always satisfy it (gen enforces the rule as an error).
+        warnings = check_optional_defaults(doc, path.name)
+    return errors, warnings
 
 
 def guess_kind(path: pathlib.Path) -> str | None:
@@ -62,7 +87,9 @@ def run(paths: list[pathlib.Path]) -> int:
         if kind is None:
             print(f"skip  {p.name} (neither manifest nor service definition)")
             continue
-        errors = validate_file(p, kind)
+        errors, warnings = validate_file(p, kind)
+        for w in warnings:
+            print(f"WARN  {w}")
         if errors:
             failures += 1
             for e in errors:

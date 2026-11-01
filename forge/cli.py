@@ -39,7 +39,7 @@ def manifest(
     manifest_mod.run(bin_dir, name, org, author, description, write)
     if write:
         from .validate import validate_file
-        errors = validate_file(pathlib.Path("manifest.yml"), "brokerpak-manifest.schema.json")
+        errors, _ = validate_file(pathlib.Path("manifest.yml"), "brokerpak-manifest.schema.json")
         for e in errors:
             typer.echo(f"FAIL {e}", err=True)
 
@@ -150,7 +150,9 @@ def service_gen(
         from .validate import validate_document
         from .project import load as load_project
         doc = yaml.safe_load(generate.gen_definition(spec, load_project()))
-        for e in validate_document(doc, "service-definition.schema.json", f"{service} (generated)"):
+        errs = validate_document(doc, "service-definition.schema.json", f"{service} (generated)")
+        errs += validate_mod.check_optional_defaults(doc, f"{service} (generated)")
+        for e in errs:
             typer.echo(f"FAIL {e}", err=True)
             raise typer.Exit(1)
     raise typer.Exit(generate.run(spec, write=write, check=check))
