@@ -5,12 +5,15 @@ brokerpaks — start from provider binaries, end with a brokerpak.
 
 ## Install
 
-Requires [uv](https://docs.astral.sh/uv/).
+Install as a standalone tool (from this public repo):
 
 ```bash
-uv sync
-uv run forge --help
+uv tool install git+https://github.com/alex-tw-lam/brokerpak-forge.git
+# or: pipx install git+https://github.com/alex-tw-lam/brokerpak-forge.git
+forge --help
 ```
+
+For development, use [uv](https://docs.astral.sh/uv/): `uv sync` then `uv run forge …`.
 
 ## Usage
 
