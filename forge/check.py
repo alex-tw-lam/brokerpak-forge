@@ -82,13 +82,30 @@ def run() -> int:
     if validate_run(paths):
         failures += 1
 
-    # gate 2: yml <-> module interface sync
+    # gate 2: yml <-> module interface sync (through the spec's module pointers;
+    # unassembled adopted modules report pending instead of failing)
     for path in definitions:
         spec_doc = yaml.safe_load(path.read_text())
         svc = spec_doc["name"]
-        module = ROOT / "terraform" / svc.removeprefix(f"{proj.definition_prefix}-")
-        errors = _check_side(svc, "provision", spec_doc.get("provision", {}), module / "provision")
-        errors += _check_side(svc, "bind", spec_doc.get("bind", {}), module / "bind")
+        short = svc.removeprefix(f"{proj.definition_prefix}-")
+        from .spec import load as load_spec, provision_dir, bind_dir_of
+        try:
+            spec_obj = load_spec(short)
+        except SystemExit:
+            spec_obj = None
+        if spec_obj is not None and spec_obj.module_dir:
+            errors = []
+            for side, directory in (("provision", provision_dir(spec_obj)),
+                                    ("bind", bind_dir_of(spec_obj))):
+                if not directory.is_dir():
+                    print(f"pending {path.name}: {side} module not assembled yet "
+                          f"({directory}) — forge assemble {short} when ready")
+                    continue
+                errors += _check_side(svc, side, spec_doc.get(side, {}), directory)
+        else:
+            module = ROOT / "terraform" / short
+            errors = _check_side(svc, "provision", spec_doc.get("provision", {}), module / "provision")
+            errors += _check_side(svc, "bind", spec_doc.get("bind", {}), module / "bind")
         for comp in spec_doc.get("bind", {}).get("computed_inputs", []):
             for key in re.findall(r'instance\.details\["([^"]+)"\]', str(comp.get("default", ""))):
                 prov_outputs = {o["field_name"] for o in spec_doc.get("provision", {}).get("outputs", [])}

@@ -192,20 +192,28 @@ def gen_bind_example(spec: ServiceSpec, proj: Project) -> str:
 
 
 def targets(spec: ServiceSpec, proj: Project) -> dict[pathlib.Path, str]:
+    from .spec import bind_dir_of, provision_dir
     stem = proj.definition_prefix.removeprefix("csb-")
     return {
         ROOT / f"{stem}-{spec.service}.yml": gen_definition(spec, proj),
-        ROOT / "terraform" / spec.service / "provision" / "variables.tf": gen_provision_variables(spec, proj),
-        ROOT / "terraform" / spec.service / "bind" / "variables.tf": gen_bind_variables(spec, proj),
+        provision_dir(spec) / "variables.tf": gen_provision_variables(spec, proj),
+        bind_dir_of(spec) / "variables.tf": gen_bind_variables(spec, proj),
         ROOT / "examples" / spec.service / "bind.tfvars.example": gen_bind_example(spec, proj),
     }
+
+
+def _rel(path: pathlib.Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 def run(spec: ServiceSpec, write: bool, check: bool, force: bool = False) -> int:
     proj = load_project()
     failed = 0
     for path, content in targets(spec, proj).items():
-        rel = path.relative_to(ROOT)
+        rel = _rel(path)
         module_owned = (path.exists() and path.name == "variables.tf"
                         and MARKER not in path.read_text())
         if module_owned:

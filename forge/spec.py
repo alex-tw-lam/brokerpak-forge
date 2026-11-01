@@ -66,6 +66,8 @@ class ServiceSpec(BaseModel):
     support_url: str = ""
     plan_updateable: bool = False
     resource: str = ""
+    module_dir: Optional[str] = None   # authoring pointer to an external provision module (scrubbed by assemble)
+    bind_dir: Optional[str] = None     # authoring pointer to an external bind module
     plans: list[PlanSpec] = Field(default_factory=list)
     inputs: dict[str, InputSpec] = Field(default_factory=dict)
     skipped_inputs: list[str] = Field(default_factory=list)   # resource args left as module-internal defaults
@@ -287,3 +289,78 @@ def inputs_from_jsonschema(doc: dict) -> dict[str, "InputSpec"]:
             rationale="imported from JSON Schema",
         )
     return out
+
+
+def _expand(p: Optional[str]) -> Optional[pathlib.Path]:
+    return pathlib.Path(str(p).replace("~", str(pathlib.Path.home()), 1)).expanduser() if p else None
+
+
+def _tilde(p: pathlib.Path) -> str:
+    home = str(pathlib.Path.home())
+    s = str(p)
+    return "~" + s[len(home):] if s.startswith(home) else s
+
+
+def provision_dir(spec: "ServiceSpec") -> pathlib.Path:
+    """Where the provision module lives: an adopted external module, or the
+    brokerpak layout (the canonical copy after assemble)."""
+    d = _expand(spec.module_dir)
+    return d if d else pathlib.Path.cwd() / "terraform" / spec.service / "provision"
+
+
+def bind_dir_of(spec: "ServiceSpec") -> pathlib.Path:
+    d = _expand(spec.bind_dir)
+    if d:
+        return d
+    if spec.module_dir:
+        return provision_dir(spec).parent / "bind"
+    return pathlib.Path.cwd() / "terraform" / spec.service / "bind"
+
+
+def inputs_from_variables_tf(text: str) -> tuple[dict[str, "InputSpec"], list[str]]:
+    """Parse variable blocks directly (the terraschema-free path).
+    Returns (inputs, warnings)."""
+    import re
+    var_re = re.compile(r'^variable\s+"([^"]+)"\s*\{(.*?)^\}', re.S | re.M)
+    type_re = re.compile(r'^\s*type\s*=\s*([a-z]+)', re.M)
+    desc_re = re.compile(r'^\s*description\s*=\s*"([^"]*)"', re.M)
+    default_re = re.compile(r'^\s*default\s*=\s*(.+?)\s*$', re.M)
+    tf_to_spec = {"string": "string", "number": "number", "bool": "boolean",
+                  "list": "array", "set": "array", "map": "object", "object": "object"}
+    inputs: dict[str, InputSpec] = {}
+    warnings: list[str] = []
+    for name, body in var_re.findall(text):
+        tm = type_re.search(body)
+        dm = desc_re.search(body)
+        dfm = default_re.search(body)
+        spec_type = tf_to_spec.get(tm.group(1), "string") if tm else "string"
+        if tm and tm.group(1) not in tf_to_spec:
+            warnings.append(f"{name}: complex type {tm.group(1)!r} defaulted to string — check it")
+        default = None
+        nullable = False
+        required = False
+        if dfm is None:
+            required = True  # terraschema semantics: no default -> required
+        else:
+            raw = dfm.group(1).strip()
+            if raw == "null":
+                nullable = True
+            elif raw.startswith('"') and raw.endswith('"') and "\\" not in raw:
+                default = raw[1:-1]
+            elif raw in ("true", "false"):
+                default = raw == "true"
+            elif re.fullmatch(r"-?\d+", raw):
+                default = int(raw)
+            elif re.fullmatch(r"-?\d+\.\d+", raw):
+                default = float(raw)
+            else:
+                nullable = True
+                warnings.append(f"{name}: default {raw[:40]!r} not representable — kept nullable")
+        inputs[name] = InputSpec(
+            field_name=name, type=spec_type,
+            details=dm.group(1) if dm else "",
+            description=dm.group(1) if dm else "",
+            default=default, nullable=nullable, required=required,
+            rationale="adopted from the module's variables.tf",
+        )
+    return inputs, warnings

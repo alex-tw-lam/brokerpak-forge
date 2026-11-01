@@ -254,7 +254,7 @@ def run(bin_dir: pathlib.Path, pak_name: Optional[str], orgs: list[str],
     manifest_path = pathlib.Path("manifest.yml")
     if manifest_path.exists():
         existing = yaml.safe_load(manifest_path.read_text()) or {}
-        doc, notes = merge_manifest(existing, binaries, pak_name, org, author, description)
+        doc, notes = merge_manifest(existing, binaries, pak_name, orgs, author, description)
         for n in notes:
             print(n)
     else:

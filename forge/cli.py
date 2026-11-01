@@ -187,6 +187,98 @@ def service_show(service: str = typer.Argument(...)) -> None:
         typer.echo(f"  skipped   {', '.join(spec.skipped_inputs)}")
 
 
+@service_app.command("adopt")
+def service_adopt(
+    module: pathlib.Path = typer.Argument(..., help="the provision module dir, wherever it lives"),
+    name: str = typer.Option(..., "--name", help="service name"),
+    bind_dir: Optional[pathlib.Path] = typer.Option(None, "--bind-dir", help="bind module dir if one exists"),
+    schema: Optional[pathlib.Path] = typer.Option(None, "--schema", help="terraschema JSON instead of native parsing"),
+    write: bool = typer.Option(False, "--write", help="write the spec instead of previewing"),
+) -> None:
+    """Adopt a terraform module in place: no copying, no binaries, no manifest."""
+    import re as _re
+    import yaml as _yaml
+    from .project import load as load_project
+    from .spec import (OutputSpec, ServiceSpec, _tilde, _uuid_placeholder,
+                       inputs_from_jsonschema, inputs_from_variables_tf)
+
+    out_re = _re.compile(r'^output\s+"([^"]+)"\s*\{', _re.M)
+    prov_out = module / "outputs.tf"
+    outputs = sorted(out_re.findall(prov_out.read_text())) if prov_out.is_file() else []
+
+    if schema is not None:
+        import json as _json
+        from .spec import check_jsonschema
+        doc = _json.loads(schema.read_text())
+        try:
+            check_jsonschema(doc)
+        except ValueError as e:
+            typer.echo(f"{schema.name}: {e}")
+            raise typer.Exit(1)
+        inputs = inputs_from_jsonschema(doc)
+        warns = []
+    else:
+        var_file = module / "variables.tf"
+        if not var_file.is_file():
+            typer.echo(f"no variables.tf in {module} (and no --schema given)")
+            raise typer.Exit(1)
+        inputs, warns = inputs_from_variables_tf(var_file.read_text())
+        if not inputs:
+            typer.echo(f"could not parse any variable from {module}/variables.tf — try --schema")
+            raise typer.Exit(1)
+
+    bind_outputs: list[str] = []
+    bind_inputs: dict = {}
+    bdir = bind_dir or module.parent / "bind"
+    if bdir.is_dir():
+        bout = bdir / "outputs.tf"
+        if bout.is_file():
+            bind_outputs = sorted(out_re.findall(bout.read_text()))
+        bvars = bdir / "variables.tf"
+        if bvars.is_file():
+            bind_inputs, _ = inputs_from_variables_tf(bvars.read_text())
+
+    proj = load_project()
+    platform = proj.standard_inputs
+    if not write:
+        preview = {
+            "inputs": {k: v.model_dump(exclude_none=True, exclude_defaults=True, exclude={"field_name"})
+                       for k, v in inputs.items()},
+            "outputs": outputs + [n for n in platform if n not in outputs],
+            "bind_outputs": bind_outputs,
+            "module_dir": _tilde(module.resolve()),
+        }
+        typer.echo(_yaml.dump(preview, sort_keys=False, default_flow_style=False, width=100))
+        for w in warns:
+            typer.echo(f"WARN {w}")
+        typer.echo(f"re-run with --write to save services/{name}.yaml")
+        return
+
+    try:
+        spec = spec_mod.load(name)
+    except SystemExit:
+        spec = ServiceSpec(service=name, id=_uuid_placeholder(),
+                           display_name=f"CSB {name}", description=f"CSB {name}",
+                           tags=["hcs", name])
+    spec.inputs.update(inputs)
+    spec.module_dir = _tilde(module.resolve())
+    if bind_dir:
+        spec.bind_dir = _tilde(bind_dir.resolve())
+    spec.outputs = ([OutputSpec(field_name=n) for n in outputs] or spec.outputs) or \
+                   [OutputSpec(field_name=n) for n in platform]
+    spec.outputs += [OutputSpec(field_name=n) for n in platform
+                     if n not in {o.field_name for o in spec.outputs}]
+    if bind_outputs:
+        spec.bind_outputs = [OutputSpec(field_name=n) for n in bind_outputs]
+    spec.bind.inputs.update(bind_inputs)
+    out = spec_mod.save(spec)
+    for w in warns:
+        typer.echo(f"WARN {w}")
+    typer.echo(f"wrote {out} (module stays at {spec.module_dir})")
+    typer.echo(f"next: forge {name} move <param> --to user|plan|computed|skipped")
+    typer.echo(f"      forge {name} gen --write")
+
+
 @service_app.command("from-jsonschema")
 def service_from_jsonschema(
     schema: pathlib.Path = typer.Argument(..., help="JSON Schema file (e.g. terraschema output)"),
@@ -231,7 +323,9 @@ def service_from_jsonschema(
         spec.resource = resource
     if module_dir:
         import re as _re
+        from .spec import _tilde
         out_re = _re.compile(r'^output\s+"([^"]+)"\s*\{', _re.M)
+        spec.module_dir = _tilde(module_dir.resolve())
         prov_out = module_dir / "outputs.tf"
         if prov_out.is_file():
             names = out_re.findall(prov_out.read_text())
@@ -307,6 +401,12 @@ def tui() -> None:
     """A Textual cockpit: services sidebar, scrolling log, TAB completion."""
     from .tui import ForgeTUI
     ForgeTUI(lambda argv: app(argv, standalone_mode=False)).run()
+
+
+@app.command()
+def assemble(service: str = typer.Argument(..., help="service with an adopted module")) -> None:
+    """Copy the adopted module into terraform/<service>/ and forget the pointer."""
+    raise typer.Exit(scaffold_mod.assemble(service))
 
 
 @app.command()

@@ -19,6 +19,13 @@ from .spec import ServiceSpec, load as load_spec
 ROOT = pathlib.Path.cwd()
 
 
+def _rel(p: pathlib.Path) -> str:
+    try:
+        return str(p.relative_to(ROOT))
+    except ValueError:
+        return str(p)
+
+
 def _versions_tf() -> str:
     man_path = ROOT / "manifest.yml"
     if not man_path.exists():
@@ -96,7 +103,8 @@ def ensure_vars(service: str) -> int:
     does not have — the platform inputs and the tagging trio."""
     import re
     from .generate import _tf_var_body
-    prov_dir = ROOT / "terraform" / service / "provision"
+    from .spec import load as load_spec, provision_dir as prov_dir_of
+    prov_dir = prov_dir_of(load_spec(service))
     var_file = prov_dir / "variables.tf"
     if not var_file.is_file():
         print(f"no {var_file} — nothing to ensure")
@@ -110,14 +118,13 @@ def ensure_vars(service: str) -> int:
         ("request_context_json", "string", "JSON of the OSB request context.", '""'),
         ("originating_identity_json", "string", "JSON of the OSB originating identity.", '""'),
     ]
-    bind_var_file = ROOT / "terraform" / service / "bind" / "variables.tf"
     missing = [w for w in want if w[0] not in have]
     if missing:
         with var_file.open("a") as f:
             f.write("\n# --- platform inputs (forge ensure-vars) ---\n")
             for name, typ, desc, default in missing:
                 f.write(_tf_var_body(name, typ, desc, default) + "\n")
-        print(f"appended to {var_file.relative_to(ROOT)}: {', '.join(m[0] for m in missing)}")
+        print(f"appended to {_rel(var_file)}: {', '.join(m[0] for m in missing)}")
     else:
         print("all platform variables already declared")
 
@@ -127,12 +134,45 @@ def ensure_vars(service: str) -> int:
     out_file = prov_dir / "outputs.tf"
     have_out = set(re.findall(r'^output\s+"([^"]+)"', out_file.read_text(), re.M)) if out_file.is_file() else set()
     missing_out = [n for n in load_project().standard_inputs if n not in have_out]
-    if missing_out and out_file.is_file():
+    if missing_out:
         with out_file.open("a") as f:
             f.write("\n# --- platform echoes (forge ensure-vars) ---\n")
             for n in missing_out:
                 f.write(f'output "{n}" {{\n  value = var.{n}\n}}\n\n')
-        print(f"appended to {out_file.relative_to(ROOT)}: {', '.join(missing_out)} outputs")
+        print(f"appended to {_rel(out_file)}: {', '.join(missing_out)} outputs")
+    return 0
+
+
+def assemble(service: str) -> int:
+    """Copy an adopted module into the brokerpak layout, patch it, forget the
+    external pointer — after this the pak copy is canonical."""
+    import shutil
+    from .spec import _tilde, load as load_spec, provision_dir, bind_dir_of
+    spec = load_spec(service)
+    if not spec.module_dir:
+        die(f"{service}: no module_dir in the spec — nothing to assemble")
+    src_prov = provision_dir(spec)
+    src_bind = bind_dir_of(spec)
+    dst_prov = ROOT / "terraform" / service / "provision"
+    dst_bind = ROOT / "terraform" / service / "bind"
+    if not src_prov.is_dir():
+        die(f"module not found at {src_prov} — re-adopt or fix module_dir")
+    shutil.rmtree(dst_prov, ignore_errors=True)
+    shutil.copytree(src_prov, dst_prov)
+    print(f"copied {src_prov} -> {dst_prov.relative_to(ROOT)}")
+    if src_bind.is_dir():
+        shutil.rmtree(dst_bind, ignore_errors=True)
+        shutil.copytree(src_bind, dst_bind)
+        print(f"copied {src_bind} -> {dst_bind.relative_to(ROOT)}")
+    spec.module_dir = None
+    spec.bind_dir = None
+    from .spec import save
+    save(spec)
+    print("scrubbed module_dir/bind_dir — the pak copy is canonical now")
+    ensure_vars(service)
+    from .generate import run as gen_run
+    gen_run(load_spec(service), write=True, check=False)
+    print("\nnext: forge add <binaries> (if not yet) -> forge check -> pak build")
     return 0
 
 
