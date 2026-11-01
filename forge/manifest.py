@@ -36,6 +36,10 @@ def _binary_in(entry: pathlib.Path, stem: str) -> pathlib.Path | None:
 
 def parse_bin_dir(bin_dir: pathlib.Path) -> list[dict]:
     """Return [{name, version, os, arch, file}] for every staged binary found."""
+    if not bin_dir.is_dir():
+        die(f"no binary directory at {bin_dir} — stage the release binaries there "
+            f"(bin/tofu_<ver>_<os>_<arch>/, bin/terraform-provider-<name>_<ver>_<os>_<arch>/) "
+            "or pass --bin-dir")
     found: dict[tuple[str, str, str, str], pathlib.Path] = {}
     for entry in sorted(bin_dir.iterdir()):
         stem = entry.name.removesuffix(".zip")
