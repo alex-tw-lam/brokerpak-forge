@@ -31,13 +31,6 @@ each argument as `user` / `plan` / `computed` (platform) / `skipped` — Enter
 accepts the suggestion. The legacy `forge service move csms field` form still
 works.
 
-## The SOP
-
-[docs/SOP.md](docs/SOP.md) is the operator's manual: zero → manifest → schema
-→ service → scaffold → `forge check` → `pak build`, one command per step. If a
-step ever cannot be written, the CLI gains a command — that is how `check` and
-`scaffold` were born.
-
 ## The flow
 
 ```
@@ -101,13 +94,23 @@ forge --install-completion   # bash / zsh / fish; restart the shell
 
 ## Install & use
 
+Managed with [uv](https://docs.astral.sh/uv/):
+
 ```bash
-pip install typer pydantic pyyaml          # or: pip install -e .
+uv sync                                   # create .venv from uv.lock
+uv run forge --help
+# or install the entry point into the venv:
+uv pip install -e . && forge --help
+```
+
+Typical session in a brokerpak directory:
+
+```bash
 cd your-brokerpak-dir
-forge manifest --bin-dir ./bin --name my-services --org huaweicloud --write
-forge schema extract
-forge service new myservice
-forge service gen myservice --write
+uv run --project /path/to/brokerpak-forge forge manifest --bin-dir ./bin --org huaweicloud --write
+uv run --project /path/to/brokerpak-forge forge schema extract
+uv run --project /path/to/brokerpak-forge forge service new myservice
+uv run --project /path/to/brokerpak-forge forge myservice gen --write
 ```
 
 Every generated file is idempotent — `forge service gen <svc> --check` is a CI
