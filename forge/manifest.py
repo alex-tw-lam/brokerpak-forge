@@ -59,20 +59,38 @@ def parse_bin_dir(bin_dir: pathlib.Path) -> list[dict]:
     return out
 
 
-def _namespace(short: str, org: Optional[str]) -> str:
-    """Built-in guesses win (hashicorp/random stays hashicorp even under
-    --org huaweicloud); --org fills in providers we do not know."""
-    return ORG_GUESSES.get(short) or org or short
+def resolve_address(short: str, pairs: dict[str, str],
+                    blanket: Optional[str], proj) -> str:
+    """Provider registry address: --org name=ns pairs win, then forge.yaml
+    provider_orgs, then built-in guesses, then a blanket --org. Unknown
+    providers are rejected with guidance instead of a silently wrong address."""
+    value = (pairs.get(short) or proj.provider_orgs.get(short)
+             or ORG_GUESSES.get(short) or blanket)
+    if value is None:
+        die(f"cannot determine the registry namespace for provider {short!r}.\n"
+            f"  forge manifest --org {short}=<namespace> ...        # one-off\n"
+            f"  or forge.yaml: provider_orgs: {{{short}: <namespace>}}   # persistent")
+    return value if "/" in value else f"{value}/{short}"
 
 
-def _source_entry(name: str, org: Optional[str]) -> Optional[dict]:
-    if name == "tofu":
-        return None  # tofu has no provider address
-    short = name.removeprefix("terraform-provider-")
-    return {"provider": f"{_namespace(short, org)}/{short}"}
+def parse_org_flags(flags: list[str]) -> tuple[dict[str, str], Optional[str]]:
+    """--org accepts 'ns' (blanket default) or 'provider=ns' (per provider),
+    repeatable: --org huaweicloud --org csbpg=cloudfoundry.org/cloud-service-broker"""
+    pairs: dict[str, str] = {}
+    blanket: Optional[str] = None
+    for f in flags or []:
+        if "=" in f:
+            k, v = f.split("=", 1)
+            pairs[k.strip()] = v.strip()
+        elif blanket is None:
+            blanket = f.strip()
+        else:
+            die(f"--org {f!r}: a blanket namespace was already given ({blanket!r}); "
+                "use provider=namespace pairs for anything else")
+    return pairs, blanket
 
 
-def build_manifest(binaries: list[dict], pak_name: str, org: Optional[str],
+def build_manifest(binaries: list[dict], pak_name: str, orgs: list[str],
                    author: str, description: str) -> dict:
     platforms = sorted({(b["os"], b["arch"]) for b in binaries})
     entries = []
@@ -89,12 +107,16 @@ def build_manifest(binaries: list[dict], pak_name: str, org: Optional[str],
                 entry["default"] = True
                 tofu_seen = True
         else:
+            from .project import load as load_project
+            pairs, blanket = parse_org_flags(orgs)
+            short = b["name"].removeprefix("terraform-provider-")
+            addr = resolve_address(short, pairs, blanket, load_project())
             entry = {
                 "name": b["name"],
                 "version": b["version"],
-                "source": f"https://github.com/{_namespace(b['name'].removeprefix('terraform-provider-'), org)}"
+                "source": f"https://github.com/{addr.split('/')[0]}"
                           f"/{b['name']}/archive/v{b['version']}.zip",
-                **(_source_entry(b["name"], org) or {}),
+                "provider": addr,
                 "url_template": "./bin/${name}_${version}_${os}_${arch}/${name}_v${version}",
             }
         entries.append(entry)
@@ -119,7 +141,7 @@ def build_manifest(binaries: list[dict], pak_name: str, org: Optional[str],
 
 
 def merge_manifest(existing: dict, binaries: list[dict], pak_name: Optional[str],
-                   org: Optional[str], author: Optional[str],
+                   orgs: list[str], author: Optional[str],
                    description: Optional[str]) -> tuple[dict, list[str]]:
     """Update an existing manifest in place: refresh/add binary entries for what
     is staged, keep everything the operator hand-edited (extra platforms, upgrade
@@ -137,7 +159,7 @@ def merge_manifest(existing: dict, binaries: list[dict], pak_name: Optional[str]
             meta["description"] = description
         doc["metadata"] = meta
 
-    fresh = build_manifest(binaries, doc.get("name", "hcs-services"), org,
+    fresh = build_manifest(binaries, doc.get("name", "hcs-services"), orgs,
                            author or "", description or "")
     old_keys = {(b["name"], b["version"]) for b in doc.get("terraform_binaries", [])}
     new_keys = {(b["name"], b["version"]) for b in fresh["terraform_binaries"]}
@@ -166,7 +188,64 @@ def merge_manifest(existing: dict, binaries: list[dict], pak_name: Optional[str]
     return doc, notes
 
 
-def run(bin_dir: pathlib.Path, pak_name: Optional[str], org: Optional[str],
+BARE = re.compile(r"^(?P<name>terraform-provider-[a-z0-9-]+)_v(?P<version>\d+\.\d+\.\d+)_(?P<os>[a-z0-9]+)_(?P<arch>[a-z0-9]+)$")
+
+
+def parse_one(path: pathlib.Path) -> dict:
+    """One binary at a time: a staged dir, a release zip, or a bare binary."""
+    path = path.expanduser().resolve()
+    if path.is_dir():
+        for inner in sorted(path.iterdir()):
+            if inner.is_dir():
+                continue
+            m = STAGED.match(path.name.removesuffix(".zip")) or STAGED.match(inner.name.removesuffix(".zip"))
+            if m and (inner.name.startswith(m["name"]) or m["name"].startswith("tofu")):
+                binary = _binary_in(path, m["name"])
+                if binary:
+                    return {"name": m["name"], "version": m["version"],
+                            "os": m["os"], "arch": m["arch"], "file": binary}
+        die(f"cannot parse a release identity from directory {path.name} "
+            "(expected name_version_os_arch)")
+    if path.is_file():
+        stem = path.name.removesuffix(".zip")
+        m = STAGED.match(stem)
+        if m:
+            return {"name": m["name"], "version": m["version"],
+                    "os": m["os"], "arch": m["arch"], "file": path}
+        m = BARE.match(stem) or re.match(
+            r"^(?P<name>tofu)_(?P<version>\d+\.\d+\.\d+)_(?P<os>[a-z0-9]+)_(?P<arch>[a-z0-9]+)$", stem)
+        if m:
+            print(f"note: {path.name} carries no os/arch in the name — assuming linux/amd64")
+            return {"name": m["name"], "version": m["version"],
+                    "os": "linux", "arch": "amd64", "file": path}
+        m = re.match(r"^(?P<name>terraform-provider-[a-z0-9-]+)_v(?P<version>\d+\.\d+\.\d+)$", stem)
+        if m:
+            print(f"note: {path.name} carries no os/arch in the name — assuming linux/amd64")
+            return {"name": m["name"], "version": m["version"],
+                    "os": "linux", "arch": "amd64", "file": path}
+        die(f"cannot parse a release identity from {path.name} "
+            "(expected name_version_os_arch[.zip] or a terraform-provider-..._vX.Y.Z binary)")
+    die(f"no such file or directory: {path}")
+
+
+def run_add(paths: list[pathlib.Path], name: Optional[str], orgs: list[str],
+            author: Optional[str], description: Optional[str]) -> None:
+    binaries = [parse_one(p) for p in paths]
+    manifest_path = pathlib.Path("manifest.yml")
+    if manifest_path.exists():
+        doc, notes = merge_manifest(yaml.safe_load(manifest_path.read_text()) or {},
+                                    binaries, name, orgs, author, description)
+    else:
+        doc = build_manifest(binaries, name or "hcs-services", orgs,
+                             author or "CHANGE_ME", description or "Cloud Service Broker pak")
+        notes = [f"created manifest.yml"]
+    for n in notes:
+        print(n)
+    manifest_path.write_text(yaml.dump(doc, sort_keys=False, default_flow_style=False, width=100))
+    print(f"wrote manifest.yml ({len(doc['terraform_binaries'])} binaries)")
+
+
+def run(bin_dir: pathlib.Path, pak_name: Optional[str], orgs: list[str],
         author: Optional[str], description: Optional[str], write: bool) -> None:
     binaries = parse_bin_dir(bin_dir)
     if not binaries:
@@ -179,7 +258,7 @@ def run(bin_dir: pathlib.Path, pak_name: Optional[str], org: Optional[str],
         for n in notes:
             print(n)
     else:
-        doc = build_manifest(binaries, pak_name or "hcs-services", org,
+        doc = build_manifest(binaries, pak_name or "hcs-services", orgs,
                              author or "CHANGE_ME", description or "Cloud Service Broker pak")
     text = yaml.dump(doc, sort_keys=False, default_flow_style=False, width=100)
     if write:

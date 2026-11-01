@@ -17,6 +17,10 @@ class Project(BaseModel):
         default_factory=lambda: ["region", "cloud", "project_name"],
         description="config-defaulted inputs every service gets (computed per platform)")
     tofu_version: Optional[str] = None          # filled from the manifest when present
+    provider_orgs: dict[str, str] = Field(
+        default_factory=dict,
+        description="registry namespace (or full address) per provider short name, "
+                    "e.g. {hcs: huaweicloud, csbpg: cloudfoundry.org/cloud-service-broker}")
     env_config_mapping: dict[str, str] = Field(
         default_factory=lambda: {"HCS_CLOUD": "hcs.cloud", "HCS_REGION_NAME": "hcs.region",
                                  "HCS_PROJECT_NAME": "hcs.project_name"},

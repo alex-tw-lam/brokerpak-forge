@@ -32,7 +32,10 @@ app.add_typer(service_app, name="service")
 def manifest(
     bin_dir: pathlib.Path = typer.Option(pathlib.Path("bin"), "--bin-dir"),
     name: Optional[str] = typer.Option(None, "--name", help="only applied when set (existing value kept otherwise)"),
-    org: Optional[str] = typer.Option(None, "--org", help="github org of the providers, e.g. huaweicloud"),
+    org: list[str] = typer.Option(None, "--org",
+                                  help="registry namespace, repeatable: --org huaweicloud "
+                                       "--org csbpg=cloudfoundry.org/cloud-service-broker "
+                                       "(blanket default or per-provider pairs)"),
     author: Optional[str] = typer.Option(None, "--author"),
     description: Optional[str] = typer.Option(None, "--description"),
     write: bool = typer.Option(False, "--write"),
@@ -48,6 +51,18 @@ def manifest(
 
 
 # -------------------------------------------------------------------- schema
+
+@app.command()
+def add(
+    paths: list[pathlib.Path] = typer.Argument(..., help="staged dir, release zip or bare binary — one at a time or several"),
+    name: Optional[str] = typer.Option(None, "--name"),
+    org: list[str] = typer.Option(None, "--org", help="namespace or provider=namespace pairs, repeatable"),
+    author: Optional[str] = typer.Option(None, "--author"),
+    description: Optional[str] = typer.Option(None, "--description"),
+) -> None:
+    """Add binaries to manifest.yml one at a time (creates it if absent)."""
+    manifest_mod.run_add(paths, name, org, author, description)
+
 
 @schema_app.command("extract")
 def schema_extract(bin_dir: Optional[pathlib.Path] = typer.Option(None, "--bin-dir")) -> None:

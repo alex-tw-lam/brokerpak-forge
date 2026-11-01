@@ -21,7 +21,9 @@ Run inside a brokerpak directory (`./bin`, `manifest.yml`, `services/`,
 `terraform/`):
 
 ```bash
-forge manifest --write          # ./bin binaries -> manifest.yml
+forge add ./bin/tofu_1.11.3_linux_amd64          # one binary at a time
+forge add ./bin/terraform-provider-hcs_2.4.26_linux_amd64 --org hcs=huaweicloud
+forge manifest --write          # or scan a whole ./bin directory
 forge schema extract            # offline provider schema
 forge schema list / show NAME   # discover resources and their arguments
 
